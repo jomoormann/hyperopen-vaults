@@ -24,6 +24,8 @@
     <img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=for-the-badge" alt="License: AGPL v3" />
   </a>
 </p>
+> **This is a fork.** It is [Hyperopen](https://github.com/thegeronimo/hyperopen) by thegeronimo with one addition, made in November 2026: a contract account on HyperEVM (a Safe, for example) can trade. Everything else is upstream's work. The license is the same, AGPL-3.0. The addition is experimental and has not yet run with a real vault on mainnet. See [docs/contract-accounts.md](docs/contract-accounts.md).
+
 <p align="center">
   <img src="docs/images/screenshot-trade.png" alt="Hyperopen trading interface" width="100%" />
 </p>
