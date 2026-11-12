@@ -567,6 +567,10 @@ function answerEntry(state, entry) {
       return rpcResult(id, quantityHex(fixture.gasPriceWei));
     case "eth_chainId":
       return rpcResult(id, "0x3e7");
+    case "eth_getCode":
+      // `fixture.code` maps a lowercase address to its code; an address
+      // without an entry is an EOA.
+      return rpcResult(id, fixture.code?.[String(params[0]).toLowerCase()] ?? "0x");
     case "eth_estimateGas": {
       const error = fixture.estimateErrors.shift();
       if (error) return rpcError(id, error.code, error.message, error.data);

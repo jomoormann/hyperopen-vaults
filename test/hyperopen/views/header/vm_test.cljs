@@ -30,6 +30,17 @@
     (is (true? (get-in api-vm [:more-nav :active?])))
     (is (true? (get-in subaccounts-vm [:more-nav :active?])))))
 
+(deftest header-vm-labels-a-contract-account-registration-test
+  (let [label (fn [step]
+                (get-in (vm/header-vm {:wallet {:connected? true
+                                                :address connected-address
+                                                :agent {:status :approving
+                                                        :vault-registration {:step step}}}})
+                        [:wallet :enable-trading :label]))]
+    (is (= "Confirm in wallet..." (label :wallet)))
+    (is (= "Awaiting registration..." (label :hyperliquid)))
+    (is (= "Awaiting signature..." (label nil)))))
+
 (deftest header-vm-projects-wallet-enable-trading-state-test
   (let [approving-vm (vm/header-vm {:wallet {:connected? true
                                              :address connected-address

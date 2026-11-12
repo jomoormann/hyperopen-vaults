@@ -86,13 +86,23 @@
                       :event.currentTarget/bounds]]
      :mobile-label button-label}))
 
+(defn- approving-label
+  "A contract account registers its key with a transaction, not a signature,
+   and then waits for Hyperliquid to apply it
+   (`hyperopen.wallet.vault-registration`)."
+  [agent-state]
+  (case (get-in agent-state [:vault-registration :step])
+    :wallet "Confirm in wallet..."
+    :hyperliquid "Awaiting registration..."
+    "Awaiting signature..."))
+
 (defn- enable-trading-vm
   [agent-state]
   (let [status (:status agent-state)
         disabled? (boolean (#{:approving :unlocking} status))]
     (when (not= :ready status)
       {:label (case status
-                :approving "Awaiting signature..."
+                :approving (approving-label agent-state)
                 :locked "Unlock Trading"
                 :unlocking "Awaiting passkey..."
                 "Enable Trading")

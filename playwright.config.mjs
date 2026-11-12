@@ -5,6 +5,12 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:8080";
 const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "true";
 const webServerCommand =
   process.env.PLAYWRIGHT_WEB_SERVER_COMMAND || "npm run dev:browser-inspection";
+// Run a specific Chromium build (a patched Chrome for Testing, for example)
+// instead of the one Playwright bundles, with the browser sandbox on.
+const chromiumExecutable = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
+const launchOptions = chromiumExecutable
+  ? { executablePath: chromiumExecutable, chromiumSandbox: true }
+  : undefined;
 
 export default defineConfig({
   testDir: "./tools/playwright/test",
@@ -32,7 +38,8 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "off",
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1440, height: 900 },
+    ...(launchOptions ? { launchOptions } : {})
   },
   webServer: {
     command: webServerCommand,

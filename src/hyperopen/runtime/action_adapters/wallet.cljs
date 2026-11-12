@@ -1,7 +1,6 @@
 (ns hyperopen.runtime.action-adapters.wallet
   (:require [clojure.string :as str]
             [nexus.registry :as nxr]
-            [hyperopen.api.trading :as trading-api]
             [hyperopen.platform :as platform]
             [hyperopen.portfolio.routes :as portfolio-routes]
             [hyperopen.borrow-lend.actions :as borrow-lend-actions]
@@ -11,7 +10,9 @@
             [hyperopen.wallet.agent-lockbox :as agent-lockbox]
             [hyperopen.wallet.agent-runtime :as agent-runtime]
             [hyperopen.wallet.agent-session :as agent-session]
-            [hyperopen.wallet.connection-runtime :as wallet-connection-runtime]))
+            [hyperopen.wallet.connection-runtime :as wallet-connection-runtime]
+            [hyperopen.wallet.contract-account :as contract-account]
+            [hyperopen.wallet.vault-registration :as vault-registration]))
 
 (def connect-wallet-action wallet-actions/connect-wallet-action)
 
@@ -30,6 +31,11 @@
                  :should-auto-enable-agent-trading? should-auto-enable-agent-trading?
                  :dispatch! nxr/dispatch})
         route (get-in @store [:router :path])]
+    ;; Learn early whether this is a contract account, so the guards that
+    ;; read the remembered answer have it before the first user action.
+    (when (contract-account/candidate? store)
+      (-> (contract-account/detect-for-store! store connected-address)
+          (.catch (fn [_] nil))))
     (when (str/starts-with? (or route "") "/vaults")
       (nxr/dispatch store nil [[:actions/load-vault-route route]]))
     (when (staking-actions/staking-route? route)
@@ -39,6 +45,17 @@
     (when (portfolio-routes/portfolio-optimize-route? route)
       (nxr/dispatch store nil [[:actions/load-portfolio-optimizer-route route]]))
     result))
+
+(defn- contract-account-options
+  "A contract account's trading key is always kept behind a passkey, and it
+   is stored before the registration is sent, because that registration can
+   wait a long time for other signers
+   (`hyperopen.wallet.agent-runtime.enable/lock-then-approve!`)."
+  [options]
+  (assoc options
+         :storage-mode :local
+         :local-protection-mode :passkey
+         :lock-before-approval? true))
 
 (defn enable-agent-trading
   [_ store {:keys [storage-mode local-protection-mode is-mainnet agent-name signature-chain-id]
@@ -54,14 +71,18 @@
                     :agent-address nil
                     :last-approved-at nil
                     :nonce-cursor nil}))
-          (enable-with-crypto! [crypto]
+          (enable-with-crypto! [contract-account? crypto]
+            (when contract-account?
+              (agent-session/persist-storage-mode-preference! :local)
+              (agent-session/persist-local-protection-mode-preference! :passkey))
             (agent-runtime/enable-agent-trading!
              {:store store
-              :options {:storage-mode storage-mode
-                        :local-protection-mode local-protection-mode
-                        :is-mainnet is-mainnet
-                        :agent-name agent-name
-                        :signature-chain-id signature-chain-id}
+              :options (cond-> {:storage-mode storage-mode
+                                :local-protection-mode local-protection-mode
+                                :is-mainnet is-mainnet
+                                :agent-name agent-name
+                                :signature-chain-id signature-chain-id}
+                         contract-account? contract-account-options)
               :create-agent-credentials! (:create-agent-credentials! crypto)
               :now-ms-fn platform/now-ms
               :normalize-storage-mode agent-session/normalize-storage-mode
@@ -76,17 +97,26 @@
               agent-session/default-signature-chain-id-for-environment
               :build-approve-agent-action agent-session/build-approve-agent-action
               :format-agent-name-with-valid-until agent-session/format-agent-name-with-valid-until
-              :approve-agent! trading-api/approve-agent!
+              :approve-agent! vault-registration/approve-agent!
               :persist-agent-session-by-mode! agent-session/persist-agent-session-by-mode!
               :clear-agent-session-by-mode! agent-session/clear-agent-session-by-mode!
               :clear-unlocked-session! agent-lockbox/clear-unlocked-session!
+              :clear-passkey-session-metadata! agent-session/clear-passkey-session-metadata!
               :runtime-error-message agent-runtime/runtime-error-message
-              :exchange-response-error agent-runtime/exchange-response-error}))]
-    (if-let [crypto (trading-crypto-modules/resolved-trading-crypto)]
-      (enable-with-crypto! crypto)
-      (-> (trading-crypto-modules/load-trading-crypto-module!)
-          (.then enable-with-crypto!)
-          (.catch set-agent-load-error!)))))
+              :exchange-response-error agent-runtime/exchange-response-error}))
+          (enable! [contract-account?]
+            (if-let [crypto (trading-crypto-modules/resolved-trading-crypto)]
+              (enable-with-crypto! contract-account? crypto)
+              (-> (trading-crypto-modules/load-trading-crypto-module!)
+                  (.then (partial enable-with-crypto! contract-account?))
+                  (.catch set-agent-load-error!))))]
+    ;; Only a wallet on HyperEVM can be a contract account, so every other
+    ;; wallet keeps the synchronous path and costs no RPC read.
+    (if (contract-account/candidate? store)
+      (-> (contract-account/detect-for-store! store)
+          (.then enable!)
+          (.catch set-agent-load-error!))
+      (enable! false))))
 
 (defn enable-agent-trading-action
   [state]

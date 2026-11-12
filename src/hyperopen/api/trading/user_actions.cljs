@@ -4,6 +4,7 @@
             [hyperopen.api.trading.http :as http]
             [hyperopen.trading-crypto-modules :as trading-crypto-modules]
             [hyperopen.wallet.agent-session :as agent-session]
+            [hyperopen.wallet.contract-account :as contract-account]
             [hyperopen.wallet.provider-registry :as provider-registry]))
 
 (defn parse-chain-id-int
@@ -107,7 +108,21 @@
                    (or (debug-exchange-simulator/simulated-fetch-response [[:approveAgent]])
                        (http/json-post! http/exchange-url payload))))))))
 
+(declare sign-and-post-user-action-with-wallet!)
+
+(def contract-account-user-action-message
+  "This action needs a wallet signature, which a contract account cannot give. It is not available for contract accounts yet.")
+
 (defn- sign-and-post-user-action!
+  [store address action nonce-field sign-action-key]
+  (if (true? (contract-account/known-contract-account? address))
+    ;; Hyperliquid recovers the signer of these actions with ECDSA. Asking a
+    ;; contract wallet to sign one would at best fail and at worst leave a
+    ;; stray message-signing transaction with it.
+    (js/Promise.reject (js/Error. contract-account-user-action-message))
+    (sign-and-post-user-action-with-wallet! store address action nonce-field sign-action-key)))
+
+(defn- sign-and-post-user-action-with-wallet!
   [store address action nonce-field sign-action-key]
   (let [nonce (next-user-signed-nonce! store)
         action* (atom nil)
