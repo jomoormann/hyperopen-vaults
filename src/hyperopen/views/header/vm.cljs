@@ -121,6 +121,9 @@
              (= :hyperliquid (get-in agent-state [:vault-registration :step])))
     {:label "Cancel registration"
      :hint "The trading key is stored on this device. Trading starts when the transaction is executed."
+     ;; The signers of the transaction compare this address, character by
+     ;; character, with the one their signing screen shows.
+     :key-address (get-in agent-state [:vault-registration :agent-address])
      :action [[:actions/cancel-agent-registration]]}))
 
 (defn- key-expiry-vm

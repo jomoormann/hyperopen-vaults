@@ -104,9 +104,14 @@
      (menu-hint hint "wallet-account-mode-hint")]))
 
 (defn- cancel-registration-rows
-  [{:keys [hint] :as cancel-registration}]
+  [{:keys [hint key-address] :as cancel-registration}]
   (when cancel-registration
     [(menu-hint hint "wallet-registration-hint")
+     (when (seq key-address)
+       [:div {:class ["px-3" "pb-2" "text-xs" "leading-snug"]
+              :data-role "wallet-registration-key"}
+        [:div {:class ["text-gray-400"]} "Key address"]
+        [:div {:class ["num" "break-all" "text-white" "select-all"]} key-address]])
      (menu-text-button cancel-registration "wallet-cancel-registration")]))
 
 (defn- key-expiry-rows

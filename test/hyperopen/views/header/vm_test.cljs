@@ -47,8 +47,11 @@
                                                      :address connected-address
                                                      :agent agent-state}})))
         waiting (wallet-vm {:status :approving
-                            :vault-registration {:step :hyperliquid}})]
+                            :vault-registration {:step :hyperliquid
+                                                 :agent-address connected-address}})]
     (is (= "Cancel registration" (get-in waiting [:cancel-registration :label])))
+    (is (= connected-address (get-in waiting [:cancel-registration :key-address]))
+        "the full address, for the signers to compare")
     (is (= [[:actions/cancel-agent-registration]]
            (get-in waiting [:cancel-registration :action])))
     (is (true? (get-in waiting [:enable-trading :disabled?])))
