@@ -26,6 +26,7 @@
             [hyperopen.trading-indicators-modules :as trading-indicators-modules]
             [hyperopen.ui.preferences :as ui-preferences]
             [hyperopen.vaults.infrastructure.persistence :as vault-persistence]
+            [hyperopen.wallet.contract-account :as contract-account]
             [hyperopen.wallet.core :as wallet]
             [hyperopen.wallet.idle-lock :as idle-lock]
             [hyperopen.wallet.vault-registration :as vault-registration]))
@@ -35,6 +36,7 @@
    behind: a key registration that is still waiting for signatures, and the
    idle lock of its key."
   [store]
+  (contract-account/install-detection! store)
   (wallet/init-wallet! store)
   (vault-registration/install-resume! store)
   (idle-lock/install! store))

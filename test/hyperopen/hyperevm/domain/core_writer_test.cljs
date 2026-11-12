@@ -63,3 +63,62 @@
           :data unnamed-registration-calldata
           :chainId "0x3e7"}
          (core-writer/add-api-wallet-tx agent-address ""))))
+
+;; --- usdClassTransfer (action 7) ------------------------------------------------
+;; Both vectors were produced independently with viem on 2026-11-12:
+;; `encodeFunctionData(sendRawAction, 0x01000007 ++ encodeAbiParameters(
+;; [uint64, bool], [ntl, toPerp]))`.
+
+(def ^:private spot-to-perp-5-usd-calldata
+  (str "0x17938e13"
+       "0000000000000000000000000000000000000000000000000000000000000020"
+       "0000000000000000000000000000000000000000000000000000000000000044"
+       "01000007"
+       "00000000000000000000000000000000000000000000000000000000004c4b40"
+       "0000000000000000000000000000000000000000000000000000000000000001"
+       "00000000000000000000000000000000000000000000000000000000"))
+
+(def ^:private perp-to-spot-1234-56-usd-calldata
+  (str "0x17938e13"
+       "0000000000000000000000000000000000000000000000000000000000000020"
+       "0000000000000000000000000000000000000000000000000000000000000044"
+       "01000007"
+       "000000000000000000000000000000000000000000000000000000004995e400"
+       "0000000000000000000000000000000000000000000000000000000000000000"
+       "00000000000000000000000000000000000000000000000000000000"))
+
+(deftest usd-class-transfer-matches-the-viem-vectors-test
+  (is (= spot-to-perp-5-usd-calldata
+         (core-writer/encode-usd-class-transfer "5" true)))
+  (is (= perp-to-spot-1234-56-usd-calldata
+         (core-writer/encode-usd-class-transfer "1234.56" false)))
+  (is (= {:to "0x3333333333333333333333333333333333333333"
+          :data spot-to-perp-5-usd-calldata
+          :chainId "0x3e7"}
+         (core-writer/usd-class-transfer-tx "5.000000" true))))
+
+(deftest usd-amount-is-read-exactly-test
+  (let [ntl (fn [amount] (some-> (core-writer/usd-amount->ntl amount) str))]
+    (is (= "5000000" (ntl "5")))
+    (is (= "5000000" (ntl 5)))
+    (is (= "1" (ntl "0.000001")))
+    (is (= "1234560000" (ntl " 1234.56 ")))
+    (is (= "100000000" (ntl "100.")))
+    (is (= "1500000" (ntl "1.5000000")) "trailing zeros past 6 places lose nothing")
+    (is (= "9007199254740993" (ntl "9007199254.740993"))
+        "more digits than a float holds exactly")
+    (is (= "18446744073709551615" (ntl "18446744073709.551615"))
+        "the largest uint64")
+    (testing "what would have to be rounded or guessed is refused"
+      (is (nil? (ntl "0.0000001")))
+      (is (nil? (ntl "1.2345678")))
+      (is (nil? (ntl "0")))
+      (is (nil? (ntl "0.000000")))
+      (is (nil? (ntl "-1")))
+      (is (nil? (ntl "1e3")))
+      (is (nil? (ntl "1,5")))
+      (is (nil? (ntl ".5")))
+      (is (nil? (ntl "")))
+      (is (nil? (ntl nil)))
+      (is (nil? (ntl "18446744073709.551616")) "one more than a uint64 holds"))
+    (is (nil? (core-writer/usd-class-transfer-tx "abc" true)))))

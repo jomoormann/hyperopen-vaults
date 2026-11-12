@@ -2,6 +2,9 @@
   (:require [clojure.string :as str]
             [hyperopen.api.trading.debug-exchange-simulator :as debug-exchange-simulator]
             [hyperopen.api.trading.http :as http]
+            [hyperopen.funding.infrastructure.wallet-rpc :as wallet-rpc]
+            [hyperopen.hyperevm.domain.chain :as chain]
+            [hyperopen.hyperevm.domain.core-writer :as core-writer]
             [hyperopen.trading-crypto-modules :as trading-crypto-modules]
             [hyperopen.wallet.agent-session :as agent-session]
             [hyperopen.wallet.contract-account :as contract-account]
@@ -111,7 +114,10 @@
 (declare sign-and-post-user-action-with-wallet!)
 
 (def contract-account-user-action-message
-  "This action needs a wallet signature, which a contract account cannot give. It is not available for contract accounts yet.")
+  "A contract account cannot do this here. Move funds and change account settings from the account itself.")
+
+(def contract-account-transfer-invalid-message
+  "Enter an amount with at most 6 decimal places.")
 
 (defn- sign-and-post-user-action!
   [store address action nonce-field sign-action-key]
@@ -149,8 +155,32 @@
                    (-> (http/post-signed-action! @action* nonce signature)
                        (.then http/parse-json!))))))))
 
-(defn submit-usd-class-transfer! [store address action]
-  (sign-and-post-user-action! store address action :nonce :sign-usd-class-transfer-action!))
+(defn- submit-core-writer-transaction!
+  "Send `tx` to CoreWriter through the connected wallet. Resolves like a
+   posted action once the wallet has taken the transaction. Hyperliquid
+   applies it when the transaction is executed, which for a contract
+   account can be after other signers approved it."
+  [address tx]
+  (let [provider (provider-registry/provider)]
+    (if-not provider
+      (js/Promise.reject (js/Error. "No wallet provider found. Connect your wallet first."))
+      (-> (wallet-rpc/ensure-wallet-chain! provider (assoc chain/mainnet :verify-switch? true))
+          (.then (fn [_] (wallet-rpc/send-transaction! provider address tx)))
+          (.then (fn [_]
+                   {:status "ok"
+                    :response {:type "default"}}))))))
+
+(defn submit-usd-class-transfer!
+  "Move USDC between the perp and spot balances of `address`. A contract
+   account does it with a CoreWriter transaction instead of a signature:
+   the funds stay in the same account, so this is the one fund move the
+   trading screen makes for it."
+  [store address action]
+  (if (true? (contract-account/known-contract-account? address))
+    (if-let [tx (core-writer/usd-class-transfer-tx (:amount action) (:toPerp action))]
+      (submit-core-writer-transaction! address tx)
+      (js/Promise.reject (js/Error. contract-account-transfer-invalid-message)))
+    (sign-and-post-user-action! store address action :nonce :sign-usd-class-transfer-action!)))
 
 (defn submit-send-asset! [store address action]
   (sign-and-post-user-action! store address action :nonce :sign-send-asset-action!))

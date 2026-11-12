@@ -96,3 +96,54 @@
   (is (true? (contract-account/candidate? (atom {:wallet {:chain-id "0x3e7"}}))))
   (is (false? (contract-account/candidate? (atom {:wallet {:chain-id "0x1"}}))))
   (is (false? (contract-account/candidate? (atom {})))))
+
+(deftest detect-for-store-notes-the-answer-for-the-views-test
+  (async done
+    (let [vault "0x0eef159d0f5fe7d186bd105fce15b46c422141cf"
+          other "0x2222222222222222222222222222222222222222"
+          store (atom {:wallet {:connected? true
+                                :address vault
+                                :chain-id "0x3e7"}})]
+      (is (false? (contract-account/contract-account-state? @store)))
+      (contract-account/remember! vault true)
+      (contract-account/remember! other false)
+      (-> (contract-account/detect-for-store! store)
+          (.then (fn [contract?]
+                   (is (true? contract?))
+                   (is (true? (contract-account/contract-account-state? @store)))
+                   (testing "the note is about one address"
+                     (is (false? (contract-account/contract-account-state?
+                                  (assoc-in @store [:wallet :address] other))))
+                     (is (false? (contract-account/contract-account-state?
+                                  (assoc-in @store [:wallet :connected?] false)))))
+                   (swap! store assoc-in [:wallet :address] other)
+                   (contract-account/detect-for-store! store)))
+          (.then (fn [contract?]
+                   (is (false? contract?))
+                   (is (nil? (get-in @store [:wallet :contract-account-address])))
+                   (done)))
+          (.catch (fn [err]
+                    (is false (str "unexpected: " err))
+                    (done)))))))
+
+(deftest install-detection-checks-on-connect-and-on-chain-change-test
+  (async done
+    (let [vault "0x0eef159d0f5fe7d186bd105fce15b46c422141cf"
+          store (atom {:wallet {:connected? false :address nil :chain-id "0xa4b1"}})
+          settle (fn [] (js/Promise. (fn [resolve _] (js/setTimeout resolve 0))))]
+      (contract-account/remember! vault true)
+      (contract-account/install-detection! store)
+      (swap! store update :wallet merge {:connected? true :address vault})
+      (-> (settle)
+          (.then (fn [_]
+                   (is (false? (contract-account/contract-account-state? @store))
+                       "not on HyperEVM: no check, no note")
+                   (swap! store assoc-in [:wallet :chain-id] "0x3e7")
+                   (settle)))
+          (.then (fn [_]
+                   (is (true? (contract-account/contract-account-state? @store)))
+                   (remove-watch store ::contract-account/detect)
+                   (done)))
+          (.catch (fn [err]
+                    (is false (str "unexpected: " err))
+                    (done)))))))

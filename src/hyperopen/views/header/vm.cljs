@@ -7,6 +7,7 @@
             [hyperopen.views.header.account-selector :as account-selector]
             [hyperopen.views.header.nav :as nav]
             [hyperopen.wallet.agent-session :as agent-session]
+            [hyperopen.wallet.contract-account :as contract-account]
             [hyperopen.wallet.core :as wallet]))
 
 (def ^:private spectate-mode-trigger-tooltip-id
@@ -139,6 +140,14 @@
        :label "Renew trading key"
        :action [[:actions/enable-agent-trading]]})))
 
+(defn- account-mode-vm
+  "Say what a contract account can and cannot do in this app, where the
+   user looks when something is refused."
+  [state]
+  (when (contract-account/contract-account-state? state)
+    {:title "Contract account"
+     :hint "Trade here with a passkey-locked key. Move funds out and change account settings from the account itself."}))
+
 (defn- wallet-vm
   [state]
   (let [wallet-state (get-in state [:wallet] {})
@@ -156,6 +165,7 @@
      :enable-trading (enable-trading-vm (:agent wallet-state))
      :cancel-registration (cancel-registration-vm (:agent wallet-state))
      :key-expiry (key-expiry-vm (:agent wallet-state))
+     :account-mode (account-mode-vm state)
      :connect-action [[:actions/connect-wallet]]}))
 
 (defn- trading-settings-storage-mode

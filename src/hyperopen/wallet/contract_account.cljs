@@ -106,15 +106,64 @@
           (.catch (fn [_]
                     (js/Promise.reject (js/Error. detection-failed-message))))))))
 
+(def ^:private state-path
+  [:wallet :contract-account-address])
+
+(defn contract-account-state?
+  "True when `state` shows that the connected account was found to be a
+   contract account. For views, which cannot ask the RPC."
+  [state]
+  (let [address (abi/normalize-address (get-in state [:wallet :address]))]
+    (boolean
+     (and (some? address)
+          (get-in state [:wallet :connected?])
+          (= address (get-in state state-path))))))
+
+(defn- note-in-store!
+  [store address contract?]
+  (when-let [address* (abi/normalize-address address)]
+    (when (= address* (abi/normalize-address (get-in @store [:wallet :address])))
+      (let [noted (get-in @store state-path)]
+        (cond
+          (and contract? (not= noted address*))
+          (swap! store assoc-in state-path address*)
+
+          (and (not contract?) (some? noted))
+          (swap! store update :wallet dissoc :contract-account-address)))))
+  contract?)
+
 (defn detect-for-store!
   "`detect!` for the wallet in `store`. Resolves false without any request
-   when the wallet is not on HyperEVM."
+   when the wallet is not on HyperEVM. The answer is also written to the
+   store (`contract-account-state?`)."
   ([store]
    (detect-for-store! store nil))
   ([store address]
-   (let [wallet (:wallet @store)]
-     (detect! {:address (or address (:address wallet))
-               :chain-id (:chain-id wallet)}))))
+   (let [wallet (:wallet @store)
+         address* (or address (:address wallet))]
+     (-> (detect! {:address address*
+                   :chain-id (:chain-id wallet)})
+         (.then (fn [contract?]
+                  (note-in-store! store address* contract?)))))))
+
+(defn install-detection!
+  "Check the connected account now and whenever the wallet's address or
+   chain changes, so the guards and the views know what kind of account it
+   is before the first user action, also after a reload."
+  [store]
+  (letfn [(check! []
+            (when (hyperevm-chain? (get-in @store [:wallet :chain-id]))
+              (-> (detect-for-store! store)
+                  (.catch (fn [_] nil)))))]
+    (add-watch store ::detect
+               (fn [_ _ old-state new-state]
+                 (when (or (not= (get-in old-state [:wallet :address])
+                                 (get-in new-state [:wallet :address]))
+                           (not= (get-in old-state [:wallet :chain-id])
+                                 (get-in new-state [:wallet :chain-id])))
+                   (js/Promise.resolve (check!)))))
+    (check!)
+    true))
 
 (defn candidate?
   "Cheap synchronous pre-check: could the wallet in `store` be a contract

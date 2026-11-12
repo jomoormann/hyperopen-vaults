@@ -58,6 +58,20 @@
     (is (nil? (:cancel-registration (wallet-vm {:status :approving}))))
     (is (nil? (:cancel-registration (wallet-vm {:status :ready}))))))
 
+(deftest header-vm-says-what-a-contract-account-does-here-test
+  (let [mode (fn [wallet]
+               (get-in (vm/header-vm {:wallet (merge {:connected? true
+                                                      :address connected-address
+                                                      :agent {:status :ready}}
+                                                     wallet)})
+                       [:wallet :account-mode]))]
+    (is (nil? (mode {})))
+    (is (= "Contract account"
+           (:title (mode {:contract-account-address connected-address}))))
+    (is (nil? (mode {:contract-account-address
+                     "0x2222222222222222222222222222222222222222"}))
+        "a note about another address")))
+
 (deftest header-vm-asks-for-a-renewal-near-the-key-expiry-test
   (let [expiry (fn [status days-left]
                  (get-in (vm/header-vm {:wallet {:connected? true

@@ -308,6 +308,9 @@ test("a registration that waits for other signers survives a reload @regression"
   );
   // Nothing new is asked of the wallet: the same registration is waited for.
   expect((await walletLog(page)).transactions.length).toBe(0);
+  // The page knows again, without being asked to enable anything, that
+  // this is a contract account.
+  await expect.poll(() => storeValue(page, ["wallet", "contract-account-address"])).toBe(VAULT);
 
   // The other signers execute it. The key is registered, and still locked.
   info.userRoles[agentAddress] = { role: "agent", data: { user: VAULT } };

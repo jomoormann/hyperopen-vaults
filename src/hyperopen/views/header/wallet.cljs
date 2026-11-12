@@ -90,6 +90,19 @@
             :data-role data-role}
    label])
 
+(defn- account-mode-rows
+  [{:keys [hint title] :as account-mode}]
+  (when account-mode
+    [[:div {:class ["px-3"
+                    "pb-1"
+                    "text-xs"
+                    "font-medium"
+                    "leading-snug"
+                    "text-white"]
+            :data-role "wallet-account-mode"}
+      title]
+     (menu-hint hint "wallet-account-mode-hint")]))
+
 (defn- cancel-registration-rows
   [{:keys [hint] :as cancel-registration}]
   (when cancel-registration
@@ -121,8 +134,8 @@
      content]))
 
 (defn- wallet-menu
-  [{:keys [account-selector agent-error cancel-registration copy-action copy-feedback
-           disconnect-action enable-trading key-expiry menu-address-label]}]
+  [{:keys [account-mode account-selector agent-error cancel-registration copy-action
+           copy-feedback disconnect-action enable-trading key-expiry menu-address-label]}]
   (let [agent-error-row (wallet-agent-error-row agent-error)
         enable-trading-cta (enable-trading-button enable-trading)]
     (into
@@ -170,6 +183,7 @@
        agent-error-row)]
      ;; Spliced: this repo's Replicant has no fragment tag.
      (concat
+      (account-mode-rows account-mode)
       (key-expiry-rows key-expiry)
       [(when enable-trading-cta
          enable-trading-cta)]
