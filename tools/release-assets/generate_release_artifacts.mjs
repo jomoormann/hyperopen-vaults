@@ -23,13 +23,18 @@ import {
   publicPathToRelativePath
 } from "./site_metadata.mjs";
 import {
+  CADDYFILE_FILE_PATH,
   SECURITY_HEADERS_FILE_PATH,
   THEME_PRELOAD_INLINE_SOURCE,
+  buildCaddyfile,
   buildReleaseHeadersFile,
 } from "./security_headers.mjs";
 
 export const DEFAULT_SOURCE_ROOT = path.resolve("resources/public");
 export const DEFAULT_OUTPUT_ROOT = path.resolve("out/release-public");
+// Server configuration for hosts other than Cloudflare Pages. It is kept
+// outside the site root so that it is never served.
+export const DEFAULT_SERVER_CONFIG_ROOT = path.resolve("out/release-server");
 export const APP_INDEX_PATH = "index.html";
 export const APP_CSS_PATH = path.join("css", "main.css");
 export const APP_CSS_HREF = "/css/main.css";
@@ -425,6 +430,8 @@ export async function generateReleaseArtifacts({
   sourceRoot = DEFAULT_SOURCE_ROOT,
   outputRoot = DEFAULT_OUTPUT_ROOT,
   canonicalOrigin = process.env.HYPEROPEN_SITE_ORIGIN,
+  // Written only for the default release, or when a caller names a place.
+  serverConfigRoot = outputRoot === DEFAULT_OUTPUT_ROOT ? DEFAULT_SERVER_CONFIG_ROOT : null,
 } = {}) {
   const manifestPath = path.join(sourceRoot, JS_DIR, "manifest.json");
   const moduleLoaderPath = path.join(sourceRoot, JS_DIR, "module-loader.json");
@@ -538,6 +545,13 @@ export async function generateReleaseArtifacts({
     buildReleaseHeadersFile({ immutableAssetPaths })
   );
 
+  let caddyfilePath = null;
+  if (serverConfigRoot) {
+    await fs.mkdir(serverConfigRoot, { recursive: true });
+    caddyfilePath = path.join(serverConfigRoot, CADDYFILE_FILE_PATH);
+    await fs.writeFile(caddyfilePath, buildCaddyfile({ immutableAssetPaths }));
+  }
+
   const outputIndexPath = path.join(outputRoot, APP_INDEX_PATH);
 
   return {
@@ -551,6 +565,7 @@ export async function generateReleaseArtifacts({
     copiedRootAssetPaths: copiedRootAssetPaths.sort(),
     releaseMetadataScriptHref,
     securityHeadersPath: path.join(outputRoot, SECURITY_HEADERS_FILE_PATH),
+    caddyfilePath,
     releaseJavaScriptFiles,
     siteMetadata,
   };

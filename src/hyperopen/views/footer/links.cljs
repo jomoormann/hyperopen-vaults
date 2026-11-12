@@ -1,5 +1,20 @@
 (ns hyperopen.views.footer.links
-  (:require [hyperopen.views.footer.build-badge :as build-badge]))
+  (:require [clojure.string :as str]
+            [hyperopen.config :as app-config]
+            [hyperopen.views.footer.build-badge :as build-badge]))
+
+(defn source-href
+  "Where the source of the running build is: the repository at the build's
+   commit, or the repository when the commit is not known. `source-url` is
+   the repository (`hyperopen.config/SOURCE_URL`)."
+  ([build]
+   (source-href (:source-url app-config/config) build))
+  ([source-url build]
+   (let [base (some-> source-url str str/trim (str/replace #"/+$" ""))
+         sha (some-> (:sha build) str str/trim)]
+     (if (and (seq base) (seq sha) (re-matches #"^[0-9a-fA-F]{7,40}$" sha))
+       (str base "/tree/" sha)
+       base))))
 
 (def footer-link-classes
   ["text-sm" "text-trading-text" "hover:text-primary" "transition-colors"])
@@ -54,7 +69,7 @@
               paths))])
 
 (defn- render-social-icons
-  []
+  [build]
   [:div {:class social-link-group-classes
          :data-role "footer-social-links"}
    [:a {:class social-link-anchor-classes
@@ -64,9 +79,10 @@
         :aria-label "Telegram"}
     (social-icon "footer-social-telegram" "Telegram" telegram-icon)]
    [:a {:class social-link-anchor-classes
-        :href "https://github.com/thegeronimo/hyperopen"
+        :href (source-href build)
         :target "_blank"
         :rel "noreferrer"
+        :title "Source code of this version"
         :aria-label "GitHub"}
     (social-icon "footer-social-github" "GitHub" github-icon)]])
 
@@ -94,4 +110,4 @@
                     :aria-hidden true}]])
          [(build-badge/render {:build build
                                :now-ms now-ms})
-          (render-social-icons)])))
+          (render-social-icons build)])))

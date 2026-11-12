@@ -82,7 +82,10 @@
                                                  :agent {:status status
                                                          :key-expiry {:days-left days-left}}}})
                          [:wallet :key-expiry]))]
-    (is (nil? (expiry :ready 15)))
+    (is (= {:message nil :label "Replace trading key"}
+           (select-keys (expiry :ready 15) [:message :label]))
+        "far from the expiry there is no notice, but the key can be replaced at once")
+    (is (= [[:actions/enable-agent-trading]] (:action (expiry :locked 60))))
     (is (= "The trading key expires in 14 days." (:message (expiry :ready 14))))
     (is (= "The trading key expires in 1 day." (:message (expiry :locked 1))))
     (is (= "The trading key expires today." (:message (expiry :ready 0))))
