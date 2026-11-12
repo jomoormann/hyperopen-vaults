@@ -404,7 +404,7 @@
                                          full-name))
                        :started-at-ms started-at-ms
                        :saved-at-ms started-at-ms}))
-                   (-> (send-transaction! provider owner* tx)
+                   (-> (contract-account/send-transaction! send-transaction! provider owner* tx)
                        (.catch (fn [err]
                                  ;; Nothing was sent, so there is nothing to
                                  ;; wait for.
@@ -484,7 +484,7 @@
             (.then (fn [_]
                      (ensure-wallet-chain! provider (hyperevm-chain-config))))
             (.then (fn [_]
-                     (send-transaction! provider owner* tx)))
+                     (contract-account/send-transaction! send-transaction! provider owner* tx)))
             (.then (fn [_]
                      (watch! owner*
                              [:remove name*]

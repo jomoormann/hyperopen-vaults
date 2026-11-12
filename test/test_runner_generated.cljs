@@ -169,6 +169,7 @@
             [hyperopen.funding-comparison.actions-test]
             [hyperopen.funding-comparison.effects-test]
             [hyperopen.funding.actions-test]
+            [hyperopen.funding.application.contract-account-moves-test]
             [hyperopen.funding.application.deposit-submit-test]
             [hyperopen.funding.application.hyperevm-review-fixes-test]
             [hyperopen.funding.application.hyperevm-submit-failures-test]
@@ -1327,6 +1328,7 @@
              'hyperopen.funding-comparison.actions-test
              'hyperopen.funding-comparison.effects-test
              'hyperopen.funding.actions-test
+             'hyperopen.funding.application.contract-account-moves-test
              'hyperopen.funding.application.deposit-submit-test
              'hyperopen.funding.application.hyperevm-review-fixes-test
              'hyperopen.funding.application.hyperevm-submit-failures-test

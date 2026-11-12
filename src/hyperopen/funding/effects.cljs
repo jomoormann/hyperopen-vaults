@@ -14,6 +14,7 @@
             [hyperopen.funding.infrastructure.wallet-rpc :as wallet-rpc]
             [hyperopen.funding.effects.transport-runtime :as transport-runtime]
             [hyperopen.ui.dialog-focus-runtime :as dialog-focus-runtime]
+            [hyperopen.wallet.contract-account :as contract-account]
             [hyperopen.wallet.core :as wallet]))
 
 (defn update-funding-submit-error
@@ -87,6 +88,7 @@
            submit-usd-class-transfer!
            submit-send-asset!
            submit-hyperevm-to-core!
+           send-contract-account-transactions!
            refresh-spot-clearinghouse!
            next-flow-id!
            set-timeout-fn
@@ -99,6 +101,7 @@
     :or {submit-usd-class-transfer! trading-api/submit-usd-class-transfer!
          submit-send-asset! trading-api/submit-send-asset!
          submit-hyperevm-to-core! hyperevm-runtime/submit-hyperevm-to-core-tx!
+         send-contract-account-transactions! contract-account/send-transactions!
          refresh-spot-clearinghouse! hyperevm-runtime/refresh-spot-clearinghouse!
          next-flow-id! hyperevm-runtime/next-flow-id!
          log-fn hyperevm-runtime/log!
@@ -114,6 +117,7 @@
     :submit-usd-class-transfer! submit-usd-class-transfer!
     :submit-send-asset! submit-send-asset!
     :submit-hyperevm-to-core! submit-hyperevm-to-core!
+    :send-contract-account-transactions! send-contract-account-transactions!
     :refresh-spot-clearinghouse! refresh-spot-clearinghouse!
     :next-flow-id! next-flow-id!
     :set-timeout-fn set-timeout-fn

@@ -263,7 +263,10 @@
                 (entry-block (hyperevm-balances/entry state owner))
                 empty-block
                 (if evm->core?
-                  (gas-block state owner token)
+                  ;; A contract account does not pay for its own
+                  ;; transactions: whoever executes them does.
+                  (when-not (account-context/contract-account? state)
+                    (gas-block state owner token))
                   (core-fee-block state token))
                 (when (and evm->core? (= :missing status) (not= :usdc-cdw (:kind token)))
                   (block :core-account-missing (:core-account-missing messages)))

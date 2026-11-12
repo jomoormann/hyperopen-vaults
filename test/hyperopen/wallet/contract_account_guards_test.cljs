@@ -6,6 +6,8 @@
             [hyperopen.api.trading.agent-actions :as agent-actions]
             [hyperopen.api.trading.user-actions :as user-actions]
             [hyperopen.hyperevm.domain.core-writer :as core-writer]
+            [hyperopen.hyperevm.domain.tokens :as tokens]
+            [hyperopen.hyperevm.test-support.bridge-fixtures :as bridge-fixtures]
             [hyperopen.runtime.effect-adapters.wallet :as wallet-effects]
             [hyperopen.wallet.contract-account :as contract-account]
             [hyperopen.wallet.provider-registry :as provider-registry]))
@@ -59,16 +61,114 @@
     (is (= wallet-effects/contract-account-key-storage-message
            (get-in @store [:wallet :agent :error])))))
 
+(def ^:private usdc-wire-id "USDC:0x6d1e7cde53ba9467b783cb7c530ce054")
+
+(defn- funded-vault-store
+  "A vault store that knows Hyperliquid's spot tokens."
+  []
+  (let [store (vault-store)]
+    (swap! store assoc-in [:spot :meta] bridge-fixtures/bridge-spot-meta)
+    store))
+
+(def ^:private usdc-to-own-evm
+  {:type "sendAsset"
+   :destination "0x2000000000000000000000000000000000000000"
+   :sourceDex "spot"
+   :destinationDex "spot"
+   :token usdc-wire-id
+   :amount "250.5"
+   :fromSubAccount ""})
+
+(deftest the-fixture-names-usdc-as-hyperliquid-does-test
+  (is (= usdc-wire-id
+         (:wire-id (tokens/token-by-index bridge-fixtures/bridge-spot-meta 0)))))
+
+(deftest contract-account-moves-usdc-from-spot-to-its-own-hyperevm-balance-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (let [requests (atom [])
+          store (funded-vault-store)]
+      (provider-registry/set-provider-override!
+       (fake-wallet requests (js/Promise.resolve "0xhash")))
+      (-> (user-actions/submit-send-asset! store vault-address usdc-to-own-evm)
+          (.then (fn [response]
+                   (is (= "ok" (:status response)))
+                   (let [sent (filter #(= "eth_sendTransaction" (first %)) @requests)
+                         [[_ [tx]]] sent]
+                     (is (= 1 (count sent)))
+                     (is (= vault-address (:from tx)))
+                     (is (= core-writer/core-writer-address (:to tx)))
+                     (is (= (core-writer/encode-spot-usdc-to-evm "250.5") (:data tx))))
+                   (is (empty? (filter #(re-find #"sign" (first %)) @requests)))
+                   (is (nil? (get-in @store [:wallet :user-signed-nonce-cursor])))
+                   (done)))
+          (.catch (fn [err]
+                    (is false (str "unexpected: " (.-message err)))
+                    (done)))))))
+
+(deftest contract-account-send-goes-through-when-the-wallet-queues-it-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (provider-registry/set-provider-override!
+     (fake-wallet (atom [])
+                  (js/Promise.reject
+                   (js/Error. (str "Pilot added this transaction to the batch without "
+                                   "simulating it, as this chain cannot be simulated.")))))
+    (-> (user-actions/submit-send-asset! (funded-vault-store) vault-address usdc-to-own-evm)
+        (.then (fn [response]
+                 (is (= "ok" (:status response)))
+                 (done)))
+        (.catch (fn [err]
+                  (is false (str "unexpected: " (.-message err)))
+                  (done))))))
+
+(deftest contract-account-sends-nothing-to-anyone-else-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (let [requests (atom [])
+          store (funded-vault-store)
+          refused (fn [action]
+                    (-> (user-actions/submit-send-asset! store vault-address action)
+                        (.then (fn [_] ::resolved))
+                        (.catch (fn [err] (.-message err)))))
+          stranger "0x1111111111111111111111111111111111111111"]
+      (provider-registry/set-provider-override!
+       (fake-wallet requests (js/Promise.resolve "0xhash")))
+      (-> (js/Promise.all
+           #js [(refused (assoc usdc-to-own-evm :destination stranger))
+                (refused (assoc usdc-to-own-evm :destination vault-address))
+                (refused (assoc usdc-to-own-evm
+                                :destination "0x2000000000000000000000000000000000000001"))
+                (refused (assoc usdc-to-own-evm :token "PURR:0xc1fb593aeffbeb02f85e0308e9956a90"))
+                (refused (assoc usdc-to-own-evm :token "USDC:0xdeadbeefdeadbeefdeadbeefdeadbeef"))
+                (refused (assoc usdc-to-own-evm :sourceDex ""))
+                (refused (assoc usdc-to-own-evm :destinationDex "xyz"))
+                (refused (assoc usdc-to-own-evm :fromSubAccount stranger))
+                (refused (assoc usdc-to-own-evm :amount "1.000000001"))
+                (-> (user-actions/submit-send-asset! (vault-store) vault-address usdc-to-own-evm)
+                    (.then (fn [_] ::resolved))
+                    (.catch (fn [err] (.-message err))))])
+          (.then (fn [messages]
+                   (is (= (concat (repeat 8 user-actions/contract-account-send-asset-message)
+                                  [user-actions/contract-account-withdraw-invalid-message
+                                   ;; Without the spot metadata USDC cannot be
+                                   ;; told from a token that only has its name.
+                                   user-actions/contract-account-send-asset-message])
+                          (vec messages)))
+                   (is (= [] @requests) "nothing reached the wallet")
+                   (is (nil? (get-in @store [:wallet :user-signed-nonce-cursor]))
+                       "no nonce was taken, nothing was signed")
+                   (done)))))))
+
 (deftest contract-account-is-not-asked-for-user-signatures-test
   (async done
     (contract-account/remember! vault-address true)
     (let [store (vault-store)]
-      (-> (user-actions/submit-send-asset!
+      (-> (user-actions/submit-withdraw3!
            store
            vault-address
-           {:type "sendAsset"
+           {:type "withdraw3"
             :destination "0x1111111111111111111111111111111111111111"
-            :token "USDC"
             :amount "1"})
           (.then (fn [_]
                    (is false "must not resolve")

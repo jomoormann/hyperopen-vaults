@@ -147,3 +147,39 @@
           (.catch (fn [err]
                     (is false (str "unexpected: " err))
                     (done)))))))
+
+(def ^:private pilot-not-simulated-message
+  ;; The text Zodiac Pilot rejects with on a chain it cannot simulate
+  ;; (`NOT_SIMULATED_ERROR` in its `useSendTransaction.ts`).
+  "Pilot added this transaction to the batch without simulating it, as this chain cannot be simulated.")
+
+(deftest queued-by-wallet-reads-pilots-answer-test
+  (is (true? (contract-account/queued-by-wallet? (js/Error. pilot-not-simulated-message))))
+  (is (true? (contract-account/queued-by-wallet?
+              #js {:code -32603 :message pilot-not-simulated-message}))
+      "a plain EIP-1193 error object")
+  (is (true? (contract-account/queued-by-wallet?
+              (ex-info pilot-not-simulated-message {:code -32603}))))
+  (is (false? (contract-account/queued-by-wallet? (js/Error. "User rejected the request."))))
+  (is (false? (contract-account/queued-by-wallet? #js {:code 4001})))
+  (is (false? (contract-account/queued-by-wallet? nil))))
+
+(deftest send-transaction-accepts-a-hash-or-a-queued-transaction-test
+  (async done
+    (let [send (fn [answer]
+                 (-> (contract-account/send-transaction! (fn [_provider _from _tx] answer)
+                                                         #js {} "0xowner" {:to "0xto"})
+                     (.catch (fn [err] [:refused (.-message err)]))))]
+      (-> (js/Promise.all
+           #js [(send (js/Promise.resolve "0xhash"))
+                (send (js/Promise.reject (js/Error. pilot-not-simulated-message)))
+                (send (js/Promise.reject (js/Error. "User rejected the request.")))])
+          (.then (fn [results]
+                   (is (= [{:hash "0xhash"}
+                           {:hash nil :queued? true}
+                           [:refused "User rejected the request."]]
+                          (vec results)))
+                   (done)))
+          (.catch (fn [err]
+                    (is false (str "unexpected: " err))
+                    (done)))))))

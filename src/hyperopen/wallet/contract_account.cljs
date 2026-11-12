@@ -19,9 +19,11 @@
    is not remembered and rejects: guessing either way would send the account
    down the wrong path."
   (:require [clojure.string :as str]
+            [hyperopen.funding.infrastructure.wallet-rpc :as wallet-rpc]
             [hyperopen.hyperevm.domain.abi :as abi]
             [hyperopen.hyperevm.domain.chain :as chain]
-            [hyperopen.hyperevm.infrastructure.rpc :as rpc]))
+            [hyperopen.hyperevm.infrastructure.rpc :as rpc]
+            [hyperopen.wallet.provider-registry :as provider-registry]))
 
 (defonce ^:private detections
   (atom {}))
@@ -170,3 +172,59 @@
    account at all? False means the answer is certainly no."
   [store]
   (hyperevm-chain? (get-in @store [:wallet :chain-id])))
+
+;; ---------- Sending a contract account's transactions ------------------------
+
+(def ^:private queued-by-wallet-pattern
+  #"(?i)added this transaction to the batch")
+
+(defn- error-text
+  [err]
+  (when (some? err)
+    (str (or (when (= "object" (goog/typeOf err)) (unchecked-get err "message"))
+             (ex-message err)
+             ""))))
+
+(defn queued-by-wallet?
+  "True when `err` is how a contract wallet says that it took the
+   transaction but has no hash for it.
+
+   Zodiac Pilot, on a chain it cannot simulate, adds the transaction to its
+   batch and rejects the request with \"Pilot added this transaction to the
+   batch without simulating it\". For this app that is an accepted
+   transaction: it never follows a hash, it asks Hyperliquid."
+  [err]
+  (boolean (some->> (error-text err) (re-find queued-by-wallet-pattern))))
+
+(defn send-transaction!
+  "Hand `tx` to the wallet of a contract account. Resolves `{:hash h}`, or
+   `{:hash nil :queued? true}` when the wallet queued it without a hash
+   (`queued-by-wallet?`). Rejects when the wallet refused it."
+  ([provider from tx]
+   (send-transaction! wallet-rpc/send-transaction! provider from tx))
+  ([send! provider from tx]
+   (-> (js/Promise.resolve nil)
+       (.then (fn [_] (send! provider from tx)))
+       (.then (fn [hash] {:hash hash})
+              (fn [err]
+                (if (queued-by-wallet? err)
+                  {:hash nil :queued? true}
+                  (js/Promise.reject err)))))))
+
+(defn send-transactions!
+  "Switch the connected wallet to HyperEVM and hand it `txs` one after the
+   other. Resolves with one `send-transaction!` result per transaction and
+   rejects at the first one the wallet refuses."
+  [from txs]
+  (let [provider (provider-registry/provider)]
+    (if-not provider
+      (js/Promise.reject (js/Error. "No wallet provider found. Connect your wallet first."))
+      (-> (wallet-rpc/ensure-wallet-chain! provider (assoc chain/mainnet :verify-switch? true))
+          (.then (fn [_]
+                   (reduce (fn [sent tx]
+                             (.then sent
+                                    (fn [results]
+                                      (-> (send-transaction! provider from tx)
+                                          (.then (fn [result] (conj results result)))))))
+                           (js/Promise.resolve [])
+                           txs)))))))

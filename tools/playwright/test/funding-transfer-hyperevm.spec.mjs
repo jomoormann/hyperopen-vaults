@@ -1416,3 +1416,133 @@ test("a HyperEVM -> Spot move recovers from a wallet rejection and finishes by k
   await expect(modal(page)).toHaveCount(0);
   await expect(opener).toBeFocused();
 });
+
+// --- A contract account (a Safe, for example) ------------------------------------------
+//
+// It cannot sign Hyperliquid's user actions and does not pay for its own
+// transactions. Its moves between its own HyperEVM and Spot balances are
+// handed to the wallet as transactions and may be executed much later, so
+// nothing here waits for a receipt or an arrival.
+
+// Any non-empty code makes the account a contract.
+const CONTRACT_CODE = "0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e";
+// How Zodiac Pilot answers `eth_sendTransaction` on a chain it cannot
+// simulate: the transaction is in its batch, and the request is rejected.
+const PILOT_QUEUED =
+  "Pilot added this transaction to the batch without simulating it, as this chain cannot be simulated.";
+const CORE_WRITER = "0x3333333333333333333333333333333333333333";
+
+const word = (value) => BigInt(value).toString(16).padStart(64, "0");
+
+// CoreWriter `sendRawAction` of `sendAsset` (action 13): USDC, token 0, from
+// Spot to USDC's system address, which pays it out to the sender on HyperEVM.
+function spotUsdcToEvmCalldata(wei) {
+  const action =
+    "0100000d" +
+    word("0x2000000000000000000000000000000000000000") +
+    word(0) +
+    word(0xffffffff) +
+    word(0xffffffff) +
+    word(0) +
+    word(wei);
+  return `0x17938e13${word(32)}${word(action.length / 2)}${action}${"0".repeat(56)}`;
+}
+
+async function setupContractAccount(page, options = {}) {
+  const result = await setupAccount(page, {
+    ...options,
+    wallet: { chainId: HYPEREVM, ...(options.wallet || {}) },
+    rpcOverrides: { code: { [OWNER]: CONTRACT_CODE } }
+  });
+  await expect
+    .poll(() => storeValue(page, ["wallet", "contract-account-address"]), { timeout: 15_000 })
+    .toBe(OWNER);
+  return result;
+}
+
+const sendsSince = async (page, before) =>
+  (await walletLog(page))
+    .slice(before)
+    .filter((entry) => entry.method === "eth_sendTransaction")
+    .map((entry) => entry.params[0]);
+
+test("(v1) a contract account deposits USDC from HyperEVM without gas of its own, through a wallet that queues like Zodiac Pilot @regression", async ({ page }) => {
+  // No HYPE on HyperEVM: an ordinary wallet would be told to add gas first.
+  const { rpc } = await setupContractAccount(page, {
+    evm: { USDC: "1000" },
+    wallet: { sendTransactionErrors: [PILOT_QUEUED, PILOT_QUEUED] }
+  });
+  await openEvmToSpot(page, "hyperevm-0", "1000");
+  const before = (await walletLog(page)).length;
+  await role(page, "funding-transfer-submit").click();
+
+  // Both transactions are handed over, and the dialog closes.
+  await expect(modal(page)).toHaveCount(0, { timeout: 15_000 });
+  const sends = await sendsSince(page, before);
+  expect(sends).toHaveLength(2);
+  expect(sends[0]).toMatchObject({
+    from: OWNER,
+    to: USDC_TOKEN_ADDRESS,
+    data: encodeApprove(USDC_CORE_DEPOSIT_WALLET, USDC_UNITS),
+    chainId: HYPEREVM
+  });
+  expect(sends[1]).toMatchObject({
+    from: OWNER,
+    to: USDC_CORE_DEPOSIT_WALLET,
+    data: encodeCoreDeposit(USDC_UNITS),
+    chainId: HYPEREVM
+  });
+
+  // Nothing follows a receipt, and nothing blocks the next move.
+  expect(rpc.entries().filter((entry) => entry.method === "eth_getTransactionReceipt")).toEqual([]);
+  expect(await storeValue(page, ["hyperevm", "in-flight", OWNER])).toBeNull();
+  expect(await storeValue(page, ["funding-ui", "modal", "transfer-evm"])).toBeNull();
+});
+
+test("(v2) a contract account moves USDC from Spot to its own HyperEVM balance with one CoreWriter transaction @regression", async ({ page }) => {
+  await setupContractAccount(page, {
+    evm: { USDC: "1000" },
+    wallet: { sendTransactionErrors: [PILOT_QUEUED] }
+  });
+  await openBalances(page);
+  await role(page, "balances-move-spot-0-hyperevm").click();
+  await expect(modal(page)).toBeVisible();
+  await expectPlaces(page, "spot", "hyperevm");
+  await enterAmount(page, "100");
+  const before = (await walletLog(page)).length;
+  await role(page, "funding-transfer-submit").click();
+
+  await expect(modal(page)).toHaveCount(0, { timeout: 15_000 });
+  const sends = await sendsSince(page, before);
+  expect(sends).toHaveLength(1);
+  expect(sends[0]).toMatchObject({
+    from: OWNER,
+    to: CORE_WRITER,
+    // 100 USDC at HyperCore's 8 decimals.
+    data: spotUsdcToEvmCalldata(10_000_000_000n),
+    chainId: HYPEREVM
+  });
+
+  // The wallet was not asked for a signature, and nothing was posted to
+  // Hyperliquid as a signed send.
+  const methods = (await walletLog(page)).slice(before).map((entry) => entry.method);
+  expect(methods.filter((method) => method.startsWith("eth_signTypedData"))).toEqual([]);
+  expect(await signedActions(page, "sendAsset")).toEqual([]);
+  expect(await storeValue(page, ["funding-ui", "modal", "transfer-evm"])).toBeNull();
+});
+
+test("(v3) a contract account cannot move another token to HyperEVM here @regression", async ({ page }) => {
+  await setupContractAccount(page, { evm: { USDC: "1000" } });
+  await openBalances(page);
+  await role(page, "balances-move-spot-1-hyperevm").click();
+  await expect(modal(page)).toBeVisible();
+  await enterAmount(page, "100");
+  const before = (await walletLog(page)).length;
+  await role(page, "funding-transfer-submit").click();
+
+  await expect(modal(page)).toContainText("can only move USDC from Spot to its own HyperEVM balance", {
+    timeout: 15_000
+  });
+  expect(await sendsSince(page, before)).toEqual([]);
+  expect(await signedActions(page, "sendAsset")).toEqual([]);
+});

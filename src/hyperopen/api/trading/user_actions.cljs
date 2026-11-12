@@ -2,9 +2,8 @@
   (:require [clojure.string :as str]
             [hyperopen.api.trading.debug-exchange-simulator :as debug-exchange-simulator]
             [hyperopen.api.trading.http :as http]
-            [hyperopen.funding.infrastructure.wallet-rpc :as wallet-rpc]
-            [hyperopen.hyperevm.domain.chain :as chain]
             [hyperopen.hyperevm.domain.core-writer :as core-writer]
+            [hyperopen.hyperevm.domain.tokens :as tokens]
             [hyperopen.trading-crypto-modules :as trading-crypto-modules]
             [hyperopen.wallet.agent-session :as agent-session]
             [hyperopen.wallet.contract-account :as contract-account]
@@ -119,6 +118,12 @@
 (def contract-account-transfer-invalid-message
   "Enter an amount with at most 6 decimal places.")
 
+(def contract-account-withdraw-invalid-message
+  "Enter an amount with at most 8 decimal places.")
+
+(def contract-account-send-asset-message
+  "A contract account can only move USDC from Spot to its own HyperEVM balance here. Send funds to other accounts from the account itself.")
+
 (defn- sign-and-post-user-action!
   [store address action nonce-field sign-action-key]
   (if (true? (contract-account/known-contract-account? address))
@@ -161,14 +166,10 @@
    applies it when the transaction is executed, which for a contract
    account can be after other signers approved it."
   [address tx]
-  (let [provider (provider-registry/provider)]
-    (if-not provider
-      (js/Promise.reject (js/Error. "No wallet provider found. Connect your wallet first."))
-      (-> (wallet-rpc/ensure-wallet-chain! provider (assoc chain/mainnet :verify-switch? true))
-          (.then (fn [_] (wallet-rpc/send-transaction! provider address tx)))
-          (.then (fn [_]
-                   {:status "ok"
-                    :response {:type "default"}}))))))
+  (-> (contract-account/send-transactions! address [tx])
+      (.then (fn [_]
+               {:status "ok"
+                :response {:type "default"}}))))
 
 (defn submit-usd-class-transfer!
   "Move USDC between the perp and spot balances of `address`. A contract
@@ -182,8 +183,47 @@
       (js/Promise.reject (js/Error. contract-account-transfer-invalid-message)))
     (sign-and-post-user-action! store address action :nonce :sign-usd-class-transfer-action!)))
 
-(defn submit-send-asset! [store address action]
-  (sign-and-post-user-action! store address action :nonce :sign-send-asset-action!))
+(defn- blank-text?
+  [value]
+  (str/blank? (str (or value ""))))
+
+(defn- spot-usdc-to-own-evm?
+  "True when `action` is exactly the `sendAsset` that moves USDC from the
+   Spot balance to the sender's own HyperEVM balance: USDC as the spot
+   metadata in `store` knows it (token 0), to USDC's system address, from
+   Spot, not from a sub-account."
+  [store action]
+  (let [usdc (tokens/token-by-index (get-in @store [:spot :meta]) 0)]
+    (boolean
+     (and (map? usdc)
+          (seq (:wire-id usdc))
+          (= (:wire-id usdc) (:token action))
+          (= core-writer/usdc-system-address
+             (some-> (:destination action) str str/trim str/lower-case))
+          (= core-writer/usdc-system-address
+             (some-> (:system-address usdc) str str/lower-case))
+          (= "spot" (:sourceDex action))
+          (= "spot" (:destinationDex action))
+          (blank-text? (:fromSubAccount action))))))
+
+(defn submit-send-asset!
+  "Send an asset. A contract account cannot sign this, and the one send it
+   makes here is USDC from Spot to its own HyperEVM balance, as a CoreWriter
+   transaction whose every field but the amount is fixed
+   (`core-writer/spot-usdc-to-evm-tx`). Anything that would reach another
+   account is refused."
+  [store address action]
+  (cond
+    (not (true? (contract-account/known-contract-account? address)))
+    (sign-and-post-user-action! store address action :nonce :sign-send-asset-action!)
+
+    (not (spot-usdc-to-own-evm? store action))
+    (js/Promise.reject (js/Error. contract-account-send-asset-message))
+
+    :else
+    (if-let [tx (core-writer/spot-usdc-to-evm-tx (:amount action))]
+      (submit-core-writer-transaction! address tx)
+      (js/Promise.reject (js/Error. contract-account-withdraw-invalid-message)))))
 
 (defn submit-c-deposit! [store address action]
   (sign-and-post-user-action! store address action :nonce :sign-c-deposit-action!))

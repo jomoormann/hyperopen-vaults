@@ -231,6 +231,31 @@
                         "nothing was sent, so nothing is waited for")
                     (done)))))))
 
+(deftest register-agent-treats-a-queued-transaction-as-sent-test
+  (async done
+    (let [{:keys [calls deps]} (registration-deps
+                                {:roles [{:role "missing"} agent-of-vault]
+                                 ;; Zodiac Pilot on HyperEVM: the transaction is
+                                 ;; in its batch, and the request is rejected.
+                                 :send-result (js/Promise.reject
+                                               (js/Error.
+                                                (str "Pilot added this transaction to the batch "
+                                                     "without simulating it, as this chain cannot "
+                                                     "be simulated.")))})
+          store (atom {:wallet {:address vault-address
+                                :agent {:status :approving}}})]
+      (store-metadata! agent-address)
+      (-> (vault-registration/register-agent! (assoc deps :store store :track? true))
+          (.then (fn [response] (.json response)))
+          (.then (fn [body]
+                   (is (= "ok" (aget body "status")))
+                   (is (= [agent-address agent-address] (:role-reads @calls))
+                       "it went on to ask Hyperliquid")
+                   (is (some? (registration-record/load-record vault-address))
+                       "the key and its record are kept")
+                   (done)))
+          (.catch (fail! done))))))
+
 (deftest register-agent-keeps-waiting-until-cancelled-test
   (async done
     (let [{:keys [calls clock deps]} (registration-deps {:roles [{:role "missing"}]

@@ -22,7 +22,8 @@ import {
   debugCall,
   dispatch,
   expectOracle,
-  visitRoute
+  visitRoute,
+  waitForIdle
 } from "../support/hyperopen.mjs";
 import {
   clearinghouseState,
@@ -271,6 +272,9 @@ async function sentAgentAddress(page) {
 // Reload the page and connect the same account again, as a user does who
 // comes back later. Routes and the virtual authenticator's passkeys stay.
 async function comeBack(page) {
+  // A reload while a mocked request is still in flight leaves that request
+  // without an answer, which the RPC guard reports.
+  await waitForIdle(page, { quietMs: 350, timeoutMs: 8_000, pollMs: 50 });
   await visitRoute(page, "/trade");
   await debugCall(page, "installWalletSimulator", {
     accounts: [VAULT],
@@ -341,6 +345,44 @@ test("a registration that waits for other signers survives a reload @regression"
     page,
     "wallet-status",
     { connected: true, agentStatus: "locked", agentAddress },
+    { timeoutMs: 20_000 }
+  );
+});
+
+// How Zodiac Pilot answers `eth_sendTransaction` on a chain it cannot
+// simulate: the transaction is in its batch, and the request is rejected.
+const PILOT_QUEUED =
+  "Pilot added this transaction to the batch without simulating it, as this chain cannot be simulated.";
+
+test("a registration goes on when the wallet queues the transaction like Zodiac Pilot @regression", async ({ page }) => {
+  test.setTimeout(90_000);
+  const { info } = await connectAccount(page, {
+    code: CONTRACT_CODE,
+    wallet: { sendTransactionErrors: [PILOT_QUEUED] }
+  });
+
+  await dispatch(page, [":actions/enable-agent-trading"]);
+
+  // The wallet rejected the request, but the fork keeps the key and waits.
+  await expect
+    .poll(() => storeValue(page, ["wallet", "agent", "vault-registration", "step"]), {
+      timeout: 20_000
+    })
+    .toBe("hyperliquid");
+  expect(await storeValue(page, ["wallet", "agent", "status"])).toBe("approving");
+  expect(await storeValue(page, ["wallet", "agent", "error"])).toBeNull();
+  expect((await browserKeyStorage(page)).passkeyMetadata).not.toBeNull();
+  expect(await registrationRecord(page)).not.toBeNull();
+  const [sent] = (await walletLog(page)).requests
+    .filter((request) => request.method === "eth_sendTransaction")
+    .map((request) => request.params[0]);
+  const agentAddress = agentAddressOf(sent.data);
+
+  info.userRoles[agentAddress] = { role: "agent", data: { user: VAULT } };
+  await expectOracle(
+    page,
+    "wallet-status",
+    { connected: true, agentStatus: "ready", agentAddress, agentError: null },
     { timeoutMs: 20_000 }
   );
 });

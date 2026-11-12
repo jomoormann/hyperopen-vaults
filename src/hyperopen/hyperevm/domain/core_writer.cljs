@@ -14,6 +14,12 @@
    USDC between the sender's own perp and spot balances; `ntl` is the amount
    in millionths of a dollar. Its vectors were produced with viem.
 
+   `spot-usdc-to-evm` (action 13, `sendAsset`) moves USDC from the sender's
+   spot balance to USDC's system address, which HyperCore pays out to the
+   sender's own address on HyperEVM. Every field but the amount is fixed
+   here, so this encoder cannot name another recipient, token or balance.
+   Its vectors were produced with viem.
+
    `add-api-wallet` (action 9, fields `(address wallet, string name)`) was
    checked byte for byte against a registration that Hyperliquid mainnet
    applied on 2026-10-16; the test namespace holds that vector. An empty name
@@ -37,9 +43,30 @@
 
 (def ^:private usd-class-transfer-action-id 7)
 
+(def ^:private send-asset-action-id 13)
+
 (def ^:private usd-decimals
   "HyperCore counts the USD amount of a class transfer in millionths."
   6)
+
+(def ^:private usdc-wei-decimals
+  "HyperCore keeps USDC, spot token 0, with 8 decimals, and `sendAsset`
+   counts in those."
+  8)
+
+(def ^:private usdc-token-index 0)
+
+(def usdc-system-address
+  "HyperCore pays USDC that is sent here out to the sender's own address on
+   HyperEVM."
+  "0x2000000000000000000000000000000000000000")
+
+(def ^:private zero-address
+  "0x0000000000000000000000000000000000000000")
+
+(def ^:private spot-dex
+  "The id `sendAsset` uses for the spot balance."
+  4294967295)
 
 (def ^:private max-uint64
   (js/BigInt "18446744073709551615"))
@@ -120,26 +147,32 @@
       :data data
       :chainId (:chain-id chain)})))
 
-(defn usd-amount->ntl
-  "The decimal USD amount `amount` (text or number) as a count of millionths
-   (a `js/BigInt`), or nil when it is not a positive amount with at most 6
-   decimal places that fits a uint64. Text is read digit by digit, so no
-   amount is rounded on the way."
-  [amount]
+(defn decimal->units
+  "The decimal amount `amount` (text or number) as a count of units with
+   `decimals` decimal places (a `js/BigInt`), or nil when it is not a
+   positive amount with at most `decimals` places that fits a uint64. Text
+   is read digit by digit, so no amount is rounded on the way."
+  [amount decimals]
   (let [text (some-> amount str str/trim)]
     (when-let [[_ whole fraction] (and (seq text)
                                        (re-matches #"^(\d+)(?:\.(\d*))?$" text))]
       (let [fraction* (or fraction "")
-            kept (subs fraction* 0 (min usd-decimals (count fraction*)))
-            dropped (subs fraction* (min usd-decimals (count fraction*)))]
+            kept (subs fraction* 0 (min decimals (count fraction*)))
+            dropped (subs fraction* (min decimals (count fraction*)))]
         (when (re-matches #"^0*$" dropped)
-          (let [ntl (js/BigInt
-                     (str whole
-                          kept
-                          (apply str (repeat (- usd-decimals (count kept)) "0"))))]
-            (when (and (> ntl (js/BigInt 0))
-                       (<= ntl max-uint64))
-              ntl)))))))
+          (let [units (js/BigInt
+                       (str whole
+                            kept
+                            (apply str (repeat (- decimals (count kept)) "0"))))]
+            (when (and (> units (js/BigInt 0))
+                       (<= units max-uint64))
+              units)))))))
+
+(defn usd-amount->ntl
+  "The decimal USD amount `amount` as a count of millionths, or nil
+   (`decimal->units`)."
+  [amount]
+  (decimal->units amount usd-decimals))
 
 (defn usd-class-transfer-action
   "Raw action bytes (hex, no `0x`) that move `amount` USD between the
@@ -163,6 +196,37 @@
    (usd-class-transfer-tx chain/mainnet amount to-perp?))
   ([chain amount to-perp?]
    (when-let [data (encode-usd-class-transfer amount to-perp?)]
+     {:to core-writer-address
+      :data data
+      :chainId (:chain-id chain)})))
+
+(defn spot-usdc-to-evm-action
+  "Raw action bytes (hex, no `0x`) that move `amount` USDC from the sender's
+   spot balance to its own address on HyperEVM, or nil for an invalid
+   amount."
+  [amount]
+  (when-let [wei (decimal->units amount usdc-wei-decimals)]
+    (str (action-header send-asset-action-id)
+         (address-word usdc-system-address)
+         (address-word zero-address)
+         (uint-word spot-dex)
+         (uint-word spot-dex)
+         (uint-word usdc-token-index)
+         (uint-word wei))))
+
+(defn encode-spot-usdc-to-evm
+  [amount]
+  (some-> (spot-usdc-to-evm-action amount)
+          send-raw-action-calldata))
+
+(defn spot-usdc-to-evm-tx
+  "The HyperEVM transaction a contract account sends to move `amount` USDC
+   from its spot balance to its own address on HyperEVM, or nil for an
+   invalid amount."
+  ([amount]
+   (spot-usdc-to-evm-tx chain/mainnet amount))
+  ([chain amount]
+   (when-let [data (encode-spot-usdc-to-evm amount)]
      {:to core-writer-address
       :data data
       :chainId (:chain-id chain)})))

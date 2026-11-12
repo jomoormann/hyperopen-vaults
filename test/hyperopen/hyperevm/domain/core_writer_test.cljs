@@ -122,3 +122,48 @@
       (is (nil? (ntl nil)))
       (is (nil? (ntl "18446744073709.551616")) "one more than a uint64 holds"))
     (is (nil? (core-writer/usd-class-transfer-tx "abc" true)))))
+
+;; --- sendAsset (action 13): USDC from Spot to the sender on HyperEVM -------------
+;; Both vectors were produced independently with viem on 2026-11-12:
+;; `0x0100000d ++ encodeAbiParameters([address, address, uint32, uint32,
+;; uint64, uint64], [0x2000…0000, 0x0, 4294967295, 4294967295, 0, wei])`.
+
+(defn- spot-usdc-to-evm-calldata
+  [wei-word]
+  (str "0x17938e13"
+       "0000000000000000000000000000000000000000000000000000000000000020"
+       "00000000000000000000000000000000000000000000000000000000000000c4"
+       "0100000d"
+       "0000000000000000000000002000000000000000000000000000000000000000"
+       "0000000000000000000000000000000000000000000000000000000000000000"
+       "00000000000000000000000000000000000000000000000000000000ffffffff"
+       "00000000000000000000000000000000000000000000000000000000ffffffff"
+       "0000000000000000000000000000000000000000000000000000000000000000"
+       wei-word
+       "00000000000000000000000000000000000000000000000000000000"))
+
+(deftest spot-usdc-to-evm-matches-the-viem-vectors-test
+  (is (= (spot-usdc-to-evm-calldata
+          "0000000000000000000000000000000000000000000000000000000005f5e100")
+         (core-writer/encode-spot-usdc-to-evm "1")))
+  (is (= (spot-usdc-to-evm-calldata
+          "0000000000000000000000000000000000000000000000000000001cbe991a14")
+         (core-writer/encode-spot-usdc-to-evm "1234.56789012")))
+  (is (= {:to "0x3333333333333333333333333333333333333333"
+          :data (spot-usdc-to-evm-calldata
+                 "0000000000000000000000000000000000000000000000000000000005f5e100")
+          :chainId "0x3e7"}
+         (core-writer/spot-usdc-to-evm-tx "1.00"))))
+
+(deftest spot-usdc-to-evm-fixes-everything-but-the-amount-test
+  (let [body (fn [amount] (subs (core-writer/encode-spot-usdc-to-evm amount) 138))
+        fixed (fn [amount] (subs (body amount) 0 (+ 8 (* 5 64))))]
+    (is (= (fixed "1") (fixed "999999.5"))
+        "recipient, sub-account, balances and token never change")
+    (is (= "0x2000000000000000000000000000000000000000" core-writer/usdc-system-address)))
+  (testing "USDC on HyperCore has 8 decimals"
+    (is (some? (core-writer/encode-spot-usdc-to-evm "0.00000001")))
+    (is (nil? (core-writer/encode-spot-usdc-to-evm "0.000000001")))
+    (is (nil? (core-writer/encode-spot-usdc-to-evm "0")))
+    (is (nil? (core-writer/encode-spot-usdc-to-evm "-5")))
+    (is (nil? (core-writer/encode-spot-usdc-to-evm nil)))))
