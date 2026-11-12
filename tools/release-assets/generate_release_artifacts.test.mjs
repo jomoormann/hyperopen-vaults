@@ -18,6 +18,7 @@ import {
   IMMUTABLE_CACHE_CONTROL,
   THEME_PRELOAD_INLINE_SOURCE,
   THEME_PRELOAD_SCRIPT_HASH,
+  buildCaddyfile,
   buildContentSecurityPolicy,
 } from "./security_headers.mjs";
 
@@ -108,12 +109,57 @@ const SAMPLE_SCRIPT_TAG_MAIN_RELEASE_BUNDLE = [
   "",
 ].join("\n");
 
-test("release CSP permits the optimizer history API origin", () => {
+test("release CSP admits Hyperliquid and the app's bridges, and no analytics or history server", () => {
+  const policy = buildContentSecurityPolicy();
+  const hosts = [...policy.matchAll(/(?:https|wss):\/\/[a-z0-9.-]+/g)].map(([origin]) => origin);
+
+  assert.deepEqual([...new Set(hosts)].sort(), [
+    "https://api.hyperliquid.xyz",
+    "https://api.hyperunit-testnet.xyz",
+    "https://api.hyperunit.xyz",
+    "https://app.across.to",
+    "https://app.hyperliquid.xyz",
+    "https://assets.entropy.trade",
+    "https://li.quest",
+    "https://rpc.hyperliquid.xyz",
+    "https://stats-data.hyperliquid.xyz",
+    "wss://api.hyperliquid.xyz",
+  ]);
+  assert.equal(policy.includes("cloudflareinsights"), false);
+  assert.equal(policy.includes("hyperopen.xyz"), false);
+});
+
+test("the Caddyfile serves the release like Cloudflare Pages does", () => {
+  const caddyfile = buildCaddyfile({
+    immutableAssetPaths: ["/js/main.ABC.js", "/css/main.DEF.css", "/js/main.ABC.js"],
+  });
+
+  // One policy, written once, for both hosts.
+  assert.ok(caddyfile.includes(`Content-Security-Policy "${buildContentSecurityPolicy()}"`));
+  assert.ok(caddyfile.includes('X-Frame-Options "DENY"'));
+  assert.ok(caddyfile.includes(`header Cache-Control "${CONTROL_CACHE_CONTROL}"`));
   assert.ok(
-    extractCspDirective(buildContentSecurityPolicy(), "connect-src").includes(
-      "https://price-history.hyperopen.xyz"
+    caddyfile.includes(
+      `@immutable path /css/main.DEF.css /js/main.ABC.js\n\t\theader @immutable Cache-Control "${IMMUTABLE_CACHE_CONTROL}"`
     )
   );
+  // Everything that depends on order sits in one route block, as written:
+  // the default caching rule, the specific ones that override it, the 404s,
+  // and only then the file server.
+  const inRoute = caddyfile.slice(caddyfile.indexOf("\troute {"));
+  const order = [
+    "header Cache-Control",
+    "header /fonts/* Cache-Control",
+    "header @immutable Cache-Control",
+    "respond @notServed 404",
+    "handle @file {",
+    "try_files {path} {path}.html /index.html",
+  ].map((rule) => inRoute.indexOf(rule));
+  assert.ok(order.every((index) => index >= 0), `missing a rule: ${order}`);
+  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+  assert.equal((caddyfile.match(/^\troute \{$/gm) || []).length, 1);
+  assert.ok(caddyfile.includes("@notServed path /_headers /api/*"));
+  assert.ok(caddyfile.includes("{$SITE_ADDRESS::8080} {"));
 });
 
 test("release CSP permits the HyperEVM RPC origin", () => {

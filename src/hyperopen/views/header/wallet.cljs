@@ -117,16 +117,17 @@
 (defn- key-expiry-rows
   [{:keys [hint message] :as key-expiry}]
   (when key-expiry
-    [[:div {:class ["px-3"
-                    "pt-1"
-                    "pb-1"
-                    "text-xs"
-                    "font-medium"
-                    "leading-snug"
-                    "text-white"]
-            :aria-live "polite"
-            :data-role "wallet-key-expiry"}
-      message]
+    [(when (seq message)
+       [:div {:class ["px-3"
+                      "pt-1"
+                      "pb-1"
+                      "text-xs"
+                      "font-medium"
+                      "leading-snug"
+                      "text-white"]
+              :aria-live "polite"
+              :data-role "wallet-key-expiry"}
+        message])
      (menu-hint hint "wallet-key-expiry-hint")
      (menu-text-button key-expiry "wallet-renew-trading-key")
      [:div {:class ["h-px" "w-full" "bg-base-300"]}]]))

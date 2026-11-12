@@ -37,7 +37,7 @@ The wallet is never asked for a signature. The wallet menu shows the key address
 - It is kept when the wallet disconnects or switches account.
 - It locks after 30 minutes without input.
 - The app uses it for orders, cancels and margin settings only. Hyperliquid itself does not limit a trading key, so this is a guard in the app, not a security boundary.
-- From 14 days before the expiry the wallet menu offers a renewal. Trading pauses until the new key is registered. If the renewal is refused or cancelled, the old key comes back.
+- The wallet menu can replace it at any time, and asks for a renewal from 14 days before the expiry. Trading pauses until the new key is registered. If the replacement is refused or cancelled, the old key comes back.
 - A waiting registration can be cancelled, which removes the stored key.
 
 **Funds**

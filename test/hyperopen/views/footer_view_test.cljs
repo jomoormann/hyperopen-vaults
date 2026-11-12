@@ -3,6 +3,7 @@
             [cljs.test :refer-macros [deftest is]]
             [hyperopen.config :as app-config]
             [hyperopen.test-support.hiccup :as hiccup]
+            [hyperopen.views.footer.links :as footer-links]
             [hyperopen.views.footer-view :as footer-view]))
 
 (defn- find-node [pred node]
@@ -699,3 +700,24 @@
     (is (hiccup/contains-class? view-node "z-[170]"))
     (is (hiccup/contains-class? view-node "bg-base-200"))
     (is (hiccup/contains-class? view-node "isolate"))))
+
+(deftest footer-source-link-points-at-the-running-version-test
+  (is (= "https://github.com/acme/terminal/tree/0123456789abcdef0123456789abcdef01234567"
+         (footer-links/source-href "https://github.com/acme/terminal/"
+                                   {:sha "0123456789abcdef0123456789abcdef01234567"})))
+  (is (= "https://github.com/acme/terminal"
+         (footer-links/source-href "https://github.com/acme/terminal" nil))
+      "without a known commit, the repository")
+  (is (= "https://github.com/acme/terminal"
+         (footer-links/source-href "https://github.com/acme/terminal" {:sha "dev build"}))
+      "a build id that is not a commit is not put in a link")
+  (let [view (footer-view/footer-view (base-state))
+        github-link (find-node-by-data-role view "footer-social-github")
+        anchor (find-node #(and (vector? %)
+                                (= :a (first %))
+                                (= "GitHub" (get-in % [1 :aria-label])))
+                          view)]
+    (is (some? github-link))
+    (is (re-find #"^https://github\.com/[^/]+/[^/]+" (get-in anchor [1 :href])))
+    (is (not (re-find #"thegeronimo" (get-in anchor [1 :href])))
+        "a modified version links to its own source, not to upstream's")))

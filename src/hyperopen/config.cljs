@@ -17,6 +17,20 @@
 ;; included. Reporting never implies placement permission.
 (goog-define VOL_RANGE_REPORTING true)
 
+;; Where the source of this build is published. The footer links to it at the
+;; build's commit, which is what the AGPL asks of anyone who lets others use a
+;; modified version over a network. A fork that changes the code sets this to
+;; its own repository.
+(goog-define SOURCE_URL "https://github.com/jomoormann/hyperopen-vaults")
+
+;; Whether the portfolio optimizer reads price history from the history
+;; server at `:base-url` below. Release builds of this fork set it false
+;; (shadow-cljs.edn), so a self-hosted copy contacts Hyperliquid only and the
+;; optimizer reads its history from Hyperliquid directly. To use a history
+;; server, set it true and add the server's origin to `connect-src` in
+;; tools/release-assets/security_headers.mjs.
+(goog-define OPTIMIZER_HISTORY_API true)
+
 ;; Minutes without a pointer or key event after which a contract account's
 ;; trading key is locked again (hyperopen.wallet.idle-lock). 0 turns it off.
 (goog-define AGENT_IDLE_LOCK_MINUTES 30)
@@ -43,7 +57,8 @@
              :funding-history-lookback-ms 604800000
              :per-dex-stagger-ms 120
              :startup-summary-delay-ms 5000}
-   :optimizer-history-api {:enabled? true
+   :source-url SOURCE_URL
+   :optimizer-history-api {:enabled? OPTIMIZER_HISTORY_API
                            :base-url "https://price-history.hyperopen.xyz"
                            :proxy-policy :approved-proxy-allowed
                            :include-aligned-returns? true

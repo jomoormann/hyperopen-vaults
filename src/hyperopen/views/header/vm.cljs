@@ -132,16 +132,23 @@
   [agent-state]
   (let [days-left (get-in agent-state [:key-expiry :days-left])]
     (when (and (#{:ready :locked} (:status agent-state))
-               (number? days-left)
-               (<= days-left 14))
-      {:message (cond
-                  (neg? days-left) "The trading key has expired."
-                  (zero? days-left) "The trading key expires today."
-                  (= 1 days-left) "The trading key expires in 1 day."
-                  :else (str "The trading key expires in " days-left " days."))
-       :hint "Trading pauses until the new key is registered."
-       :label "Renew trading key"
-       :action [[:actions/enable-agent-trading]]})))
+               (number? days-left))
+      (if (<= days-left 14)
+        {:message (cond
+                    (neg? days-left) "The trading key has expired."
+                    (zero? days-left) "The trading key expires today."
+                    (= 1 days-left) "The trading key expires in 1 day."
+                    :else (str "The trading key expires in " days-left " days."))
+         :hint "Trading pauses until the new key is registered."
+         :label "Renew trading key"
+         :action [[:actions/enable-agent-trading]]}
+        ;; Any time, not only near the expiry: a key that may have leaked
+        ;; must be replaceable at once. The new key takes the old one's name,
+        ;; so Hyperliquid drops the old one.
+        {:message nil
+         :hint "A new key replaces this one. Trading pauses until it is registered."
+         :label "Replace trading key"
+         :action [[:actions/enable-agent-trading]]}))))
 
 (defn- account-mode-vm
   "Say what a contract account can and cannot do in this app, where the
