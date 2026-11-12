@@ -5,8 +5,9 @@ on:
   push:
   workflow_dispatch:
 
+# Read only: this fork does not commit badge updates back to main.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   tests:
@@ -123,36 +124,6 @@ jobs:
           name: raw-v8-coverage
           path: .coverage
           if-no-files-found: warn
-
-      - name: Commit Coverage Badge
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
-        run: |
-          if git diff --quiet -- \
-            .github/badges/tests-status.json \
-            .github/badges/tests-status.svg \
-            .github/badges/coverage.json \
-            .github/badges/coverage.svg \
-            .github/badges/tests-total.json \
-            .github/badges/tests-total.svg \
-            .github/badges/assertions-total.json \
-            .github/badges/assertions-total.svg; then
-            echo "Badges unchanged."
-            exit 0
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            .github/badges/tests-status.json \
-            .github/badges/tests-status.svg \
-            .github/badges/coverage.json \
-            .github/badges/coverage.svg \
-            .github/badges/tests-total.json \
-            .github/badges/tests-total.svg \
-            .github/badges/assertions-total.json \
-            .github/badges/assertions-total.svg
-          git commit -m "chore: update test and coverage badges [skip ci]"
-          git push origin "HEAD:${GITHUB_REF#refs/heads/}"
 
       - name: Fail Workflow If Any Gate Failed
         if: always()

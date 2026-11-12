@@ -33,6 +33,7 @@
             [hyperopen.platform :as platform]
             [hyperopen.wallet.agent-runtime :as agent-runtime]
             [hyperopen.wallet.agent-session :as agent-session]
+            [hyperopen.wallet.vault-registration :as vault-registration]
             [hyperopen.websocket.user :as user-ws]
             [hyperopen.websocket.client :as ws-client]))
 
@@ -210,6 +211,8 @@
 (def set-agent-local-protection-mode wallet-adapters/set-agent-local-protection-mode)
 
 (def unlock-agent-trading wallet-adapters/unlock-agent-trading)
+
+(def cancel-agent-registration wallet-adapters/cancel-agent-registration)
 
 (def copy-wallet-address wallet-adapters/copy-wallet-address)
 
@@ -428,7 +431,7 @@
           :default-signature-chain-id-for-environment agent-session/default-signature-chain-id-for-environment
           :build-approve-agent-action agent-session/build-approve-agent-action
           :format-agent-name-with-valid-until agent-session/format-agent-name-with-valid-until
-          :approve-agent! trading-api/approve-agent!
+          :approve-agent! vault-registration/approve-agent!
           :persist-agent-session-by-mode! agent-session/persist-agent-session-by-mode!
           :runtime-error-message agent-runtime/runtime-error-message
           :exchange-response-error agent-runtime/exchange-response-error

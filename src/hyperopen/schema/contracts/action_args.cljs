@@ -257,6 +257,7 @@
    :actions/enable-agent-trading ::common/no-args
    :actions/unlock-agent-trading ::common/unlock-agent-trading-args
    :actions/close-agent-recovery-modal ::common/no-args
+   :actions/cancel-agent-registration ::common/no-args
    :actions/set-agent-storage-mode ::common/set-agent-storage-mode-args
    :actions/set-agent-local-protection-mode ::common/set-agent-local-protection-mode-args
    :actions/copy-wallet-address ::common/no-args

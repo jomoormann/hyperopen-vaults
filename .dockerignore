@@ -1,0 +1,13 @@
+.git
+.github
+.shadow-cljs
+.cpcache
+.coverage
+coverage
+node_modules
+out
+tmp
+resources/public/js
+resources/public/css/main.css
+resources/public/build-id.txt
+resources/public/build-info.json

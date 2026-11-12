@@ -8,8 +8,10 @@
             [hyperopen.wallet.agent-runtime :as agent-runtime]
             [hyperopen.wallet.agent-session :as agent-session]
             [hyperopen.wallet.connection-runtime :as wallet-connection-runtime]
+            [hyperopen.wallet.contract-account :as contract-account]
             [hyperopen.wallet.copy-feedback-runtime :as wallet-copy-runtime]
-            [hyperopen.wallet.core :as wallet]))
+            [hyperopen.wallet.core :as wallet]
+            [hyperopen.wallet.vault-registration :as vault-registration]))
 
 (defn connect-wallet
   ([_ store]
@@ -21,8 +23,30 @@
      :log-fn telemetry/log!
      :request-connection! wallet/request-connection!})))
 
+(declare set-agent-storage-mode* set-agent-local-protection-mode*)
+
+(def contract-account-key-storage-message
+  "A contract account's trading key stays on this device behind a passkey.")
+
+(defn- contract-account-connected?
+  [store]
+  (true? (contract-account/known-contract-account?
+          (get-in @store [:wallet :address]))))
+
+(defn- refuse-weaker-key-storage!
+  [store]
+  (swap! store assoc-in [:wallet :agent :error] contract-account-key-storage-message)
+  nil)
+
 (defn set-agent-storage-mode
   [_ store storage-mode]
+  (if (and (contract-account-connected? store)
+           (not= :local (agent-session/normalize-storage-mode storage-mode)))
+    (refuse-weaker-key-storage! store)
+    (set-agent-storage-mode* store storage-mode)))
+
+(defn- set-agent-storage-mode*
+  [store storage-mode]
   (agent-runtime/set-agent-storage-mode!
    {:store store
     :storage-mode storage-mode
@@ -40,6 +64,13 @@
 
 (defn set-agent-local-protection-mode
   [_ store local-protection-mode]
+  (if (and (contract-account-connected? store)
+           (not= :passkey (agent-session/normalize-local-protection-mode local-protection-mode)))
+    (refuse-weaker-key-storage! store)
+    (set-agent-local-protection-mode* store local-protection-mode)))
+
+(defn- set-agent-local-protection-mode*
+  [store local-protection-mode]
   (agent-runtime/set-agent-local-protection-mode!
    {:store store
     :local-protection-mode local-protection-mode
@@ -100,6 +131,12 @@
                     (dispatch-after-success-actions! store after-success-actions)
                     result)))
        unlock-result))))
+
+(defn cancel-agent-registration
+  "Stop waiting for the contract account's key registration and remove the
+   key stored for it."
+  [_ store]
+  (vault-registration/cancel-registration! store))
 
 (defn- set-wallet-copy-feedback!
   [store kind message]

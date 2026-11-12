@@ -7,6 +7,7 @@
             [hyperopen.views.header.account-selector :as account-selector]
             [hyperopen.views.header.nav :as nav]
             [hyperopen.wallet.agent-session :as agent-session]
+            [hyperopen.wallet.contract-account :as contract-account]
             [hyperopen.wallet.core :as wallet]))
 
 (def ^:private spectate-mode-trigger-tooltip-id
@@ -86,13 +87,23 @@
                       :event.currentTarget/bounds]]
      :mobile-label button-label}))
 
+(defn- approving-label
+  "A contract account registers its key with a transaction, not a signature,
+   and then waits for Hyperliquid to apply it
+   (`hyperopen.wallet.vault-registration`)."
+  [agent-state]
+  (case (get-in agent-state [:vault-registration :step])
+    :wallet "Confirm in wallet..."
+    :hyperliquid "Awaiting registration..."
+    "Awaiting signature..."))
+
 (defn- enable-trading-vm
   [agent-state]
   (let [status (:status agent-state)
         disabled? (boolean (#{:approving :unlocking} status))]
     (when (not= :ready status)
       {:label (case status
-                :approving "Awaiting signature..."
+                :approving (approving-label agent-state)
                 :locked "Unlock Trading"
                 :unlocking "Awaiting passkey..."
                 "Enable Trading")
@@ -101,6 +112,51 @@
                    :locked :actions/unlock-agent-trading
                    :unlocking :actions/unlock-agent-trading
                    :actions/enable-agent-trading)]]})))
+
+(defn- cancel-registration-vm
+  "A contract account's registration can wait for other signers for days,
+   so the user needs a way out of it."
+  [agent-state]
+  (when (and (= :approving (:status agent-state))
+             (= :hyperliquid (get-in agent-state [:vault-registration :step])))
+    {:label "Cancel registration"
+     :hint "The trading key is stored on this device. Trading starts when the transaction is executed."
+     ;; The signers of the transaction compare this address, character by
+     ;; character, with the one their signing screen shows.
+     :key-address (get-in agent-state [:vault-registration :agent-address])
+     :action [[:actions/cancel-agent-registration]]}))
+
+(defn- key-expiry-vm
+  "A contract account's key is registered for a limited time. Near the end
+   the account needs a new one, which takes another transaction."
+  [agent-state]
+  (let [days-left (get-in agent-state [:key-expiry :days-left])]
+    (when (and (#{:ready :locked} (:status agent-state))
+               (number? days-left))
+      (if (<= days-left 14)
+        {:message (cond
+                    (neg? days-left) "The trading key has expired."
+                    (zero? days-left) "The trading key expires today."
+                    (= 1 days-left) "The trading key expires in 1 day."
+                    :else (str "The trading key expires in " days-left " days."))
+         :hint "Trading pauses until the new key is registered."
+         :label "Renew trading key"
+         :action [[:actions/enable-agent-trading]]}
+        ;; Any time, not only near the expiry: a key that may have leaked
+        ;; must be replaceable at once. The new key takes the old one's name,
+        ;; so Hyperliquid drops the old one.
+        {:message nil
+         :hint "A new key replaces this one. Trading pauses until it is registered."
+         :label "Replace trading key"
+         :action [[:actions/enable-agent-trading]]}))))
+
+(defn- account-mode-vm
+  "Say what a contract account can and cannot do in this app, where the
+   user looks when something is refused."
+  [state]
+  (when (contract-account/contract-account-state? state)
+    {:title "Contract account"
+     :hint "Trade here with a passkey-locked key. Move funds out and change account settings from the account itself."}))
 
 (defn- wallet-vm
   [state]
@@ -117,6 +173,9 @@
      :disconnect-action [[:actions/disconnect-wallet]]
      :agent-error (some-> wallet-state :agent :error str not-empty)
      :enable-trading (enable-trading-vm (:agent wallet-state))
+     :cancel-registration (cancel-registration-vm (:agent wallet-state))
+     :key-expiry (key-expiry-vm (:agent wallet-state))
+     :account-mode (account-mode-vm state)
      :connect-action [[:actions/connect-wallet]]}))
 
 (defn- trading-settings-storage-mode

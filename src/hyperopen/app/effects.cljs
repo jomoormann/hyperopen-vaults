@@ -78,6 +78,7 @@
               :set-agent-storage-mode effect-adapters/set-agent-storage-mode
               :set-agent-local-protection-mode effect-adapters/set-agent-local-protection-mode
               :unlock-agent-trading effect-adapters/unlock-agent-trading
+              :cancel-agent-registration effect-adapters/cancel-agent-registration
               :copy-wallet-address (effect-adapters/make-copy-wallet-address runtime)
               :copy-spectate-link (effect-adapters/make-copy-spectate-link runtime)}
      :pnl-share {:export-pnl-share-card-png pnl-share-effects/export-pnl-share-card-png

@@ -3,7 +3,14 @@
             [hyperopen.account.context :as account-context]
             [hyperopen.funding.application.hyperevm-run-state :as hyperevm-run-state]
             [hyperopen.funding.application.hyperevm-transfer-effects :as hyperevm-transfer-effects]
-            [hyperopen.funding.domain.transfer-invariants :as transfer-invariants]))
+            [hyperopen.funding.domain.transfer-invariants :as transfer-invariants]
+            [hyperopen.hyperevm.domain.txs :as txs]))
+
+(def contract-account-sent-message
+  "Sent to your wallet. It applies when the transaction is executed.")
+
+(def contract-account-usdc-only-message
+  "A contract account can only move USDC between HyperEVM and Spot here.")
 
 (defn- spectate-mode-submit-error
   [store]
@@ -220,7 +227,10 @@
                    (if (= "ok" (:status resp))
                      (do
                        (close-funding-modal! store default-funding-modal-state)
-                       (show-toast! store :success "Transfer submitted.")
+                       (show-toast! store :success
+                                    (if (account-context/contract-account? @store)
+                                      contract-account-sent-message
+                                      "Transfer submitted."))
                        (refresh-after-funding-submit! store dispatch! refresh-address)
                        resp)
                      (let [error-text (str/trim (str (exchange-response-error resp)))
@@ -228,6 +238,57 @@
                                         (if (seq error-text) error-text "Unknown exchange error"))]
                        (set-funding-submit-error! store show-toast! message)
                        resp))))
+          (.catch (fn [err]
+                    (let [error-text (str/trim (str (runtime-error-message err)))
+                          message (str "Transfer failed: "
+                                       (if (seq error-text) error-text "Unknown runtime error"))]
+                      (set-funding-submit-error! store show-toast! message))))))))
+
+(defn- submit-contract-account-deposit!
+  "A contract account's HyperEVM -> Spot move of USDC: the approval for
+   exactly the amount and the deposit, handed to the wallet one after the
+   other. Nothing here waits for a receipt, because a contract wallet's
+   transactions may be executed hours later, by someone else. The deposit
+   credits the sender, so the funds stay in the same account."
+  [{:keys [store
+           request
+           dispatch!
+           send-contract-account-transactions!
+           runtime-error-message
+           show-toast!
+           default-funding-modal-state
+           set-funding-submit-error!
+           close-funding-modal!
+           refresh-after-funding-submit!]}]
+  (let [state @store
+        owner (account-context/owner-address state)
+        action (:action request)
+        refusal (or (account-context/hyperevm-moves-blocked-message state)
+                    (transfer-invariants/check-request state request)
+                    (when-not (= "usdcCoreDeposit" (:kind action))
+                      contract-account-usdc-only-message)
+                    (when-not (fn? send-contract-account-transactions!)
+                      "Transfers from HyperEVM aren't available right now."))
+        plan (when-not refusal
+               [(txs/usdc-approve-tx owner action)
+                (txs/usdc-core-deposit-tx owner action)])]
+    (cond
+      (seq refusal)
+      (set-funding-submit-error! store show-toast! refusal)
+
+      (some nil? plan)
+      (set-funding-submit-error! store show-toast! "Transfer failed: the deposit could not be built.")
+
+      :else
+      (-> (try
+            (js/Promise.resolve (send-contract-account-transactions! owner plan))
+            (catch :default err
+              (js/Promise.reject err)))
+          (.then (fn [results]
+                   (close-funding-modal! store default-funding-modal-state)
+                   (show-toast! store :success contract-account-sent-message)
+                   (refresh-after-funding-submit! store dispatch! owner)
+                   results))
           (.catch (fn [err]
                     (let [error-text (str/trim (str (runtime-error-message err)))
                           message (str "Transfer failed: "
@@ -242,16 +303,25 @@
    - `hyperEvmToCore` sends HyperEVM transactions through the wallet;
    - a `sendAsset` routed `:core->evm` keeps the modal open on its run;
    - everything else (Perps <-> Spot, named-DEX sends) closes the modal on
-     success, exactly as before HyperEVM."
-  [{:keys [request] :as deps}]
-  (if (= :gas-topup (:purpose request))
-    (submit-gas-topup! deps)
-    (case (get-in request [:action :type])
-      "hyperEvmToCore" (hyperevm-transfer-effects/submit-evm-to-core! deps)
-      "sendAsset" (if (= :core->evm (:route request))
-                    (hyperevm-transfer-effects/submit-core-to-evm! deps)
-                    (submit-transfer-request! deps))
-      (submit-transfer-request! deps))))
+     success, exactly as before HyperEVM.
+
+   A contract account's moves are transactions that someone may execute
+   much later, so they never enter the HyperEVM runs, which follow a
+   receipt and an arrival: they are handed to the wallet and the modal
+   closes."
+  [{:keys [store request] :as deps}]
+  (let [contract-account? (account-context/contract-account? @store)]
+    (if (= :gas-topup (:purpose request))
+      (submit-gas-topup! deps)
+      (case (get-in request [:action :type])
+        "hyperEvmToCore" (if contract-account?
+                           (submit-contract-account-deposit! deps)
+                           (hyperevm-transfer-effects/submit-evm-to-core! deps))
+        "sendAsset" (if (and (= :core->evm (:route request))
+                             (not contract-account?))
+                      (hyperevm-transfer-effects/submit-core-to-evm! deps)
+                      (submit-transfer-request! deps))
+        (submit-transfer-request! deps)))))
 
 (defn api-submit-funding-withdraw!
   [{:keys [store

@@ -352,6 +352,7 @@
    :effects/set-agent-storage-mode ::common/set-agent-storage-mode-args
    :effects/set-agent-local-protection-mode ::common/set-agent-local-protection-mode-args
    :effects/unlock-agent-trading ::common/unlock-agent-trading-args
+   :effects/cancel-agent-registration ::common/no-args
    :effects/copy-wallet-address ::common/optional-address-args
    :effects/copy-spectate-link ::common/path-and-address-args
    :effects/export-pnl-share-card-png ::export-pnl-share-card-png-args

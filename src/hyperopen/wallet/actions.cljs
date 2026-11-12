@@ -13,6 +13,12 @@
   [_state]
   [[:effects/save [:wallet :agent :recovery-modal-open?] false]])
 
+(defn cancel-agent-registration-action
+  "Stop waiting for a contract account's key registration
+   (`hyperopen.wallet.vault-registration/cancel-registration!`)."
+  [_state]
+  [[:effects/cancel-agent-registration]])
+
 (defn enable-agent-trading-action
   [state normalize-storage-mode normalize-local-protection-mode]
   (let [wallet-address (get-in state [:wallet :address])

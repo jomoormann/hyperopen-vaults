@@ -62,6 +62,76 @@
            :data-role "wallet-agent-error"}
      message]))
 
+(defn- menu-hint
+  [text data-role]
+  [:div {:class ["px-3"
+                 "pb-2"
+                 "text-xs"
+                 "leading-snug"
+                 "text-gray-400"]
+         :data-role data-role}
+   text])
+
+(defn- menu-text-button
+  [{:keys [action label]} data-role]
+  [:button {:type "button"
+            :class ["block"
+                    "w-full"
+                    "px-3"
+                    "pb-3"
+                    "text-left"
+                    "text-xs"
+                    "font-medium"
+                    "text-[#50f6d2]"
+                    "transition-colors"
+                    "hover:underline"
+                    "focus:outline-none"]
+            :on {:click action}
+            :data-role data-role}
+   label])
+
+(defn- account-mode-rows
+  [{:keys [hint title] :as account-mode}]
+  (when account-mode
+    [[:div {:class ["px-3"
+                    "pb-1"
+                    "text-xs"
+                    "font-medium"
+                    "leading-snug"
+                    "text-white"]
+            :data-role "wallet-account-mode"}
+      title]
+     (menu-hint hint "wallet-account-mode-hint")]))
+
+(defn- cancel-registration-rows
+  [{:keys [hint key-address] :as cancel-registration}]
+  (when cancel-registration
+    [(menu-hint hint "wallet-registration-hint")
+     (when (seq key-address)
+       [:div {:class ["px-3" "pb-2" "text-xs" "leading-snug"]
+              :data-role "wallet-registration-key"}
+        [:div {:class ["text-gray-400"]} "Key address"]
+        [:div {:class ["num" "break-all" "text-white" "select-all"]} key-address]])
+     (menu-text-button cancel-registration "wallet-cancel-registration")]))
+
+(defn- key-expiry-rows
+  [{:keys [hint message] :as key-expiry}]
+  (when key-expiry
+    [(when (seq message)
+       [:div {:class ["px-3"
+                      "pt-1"
+                      "pb-1"
+                      "text-xs"
+                      "font-medium"
+                      "leading-snug"
+                      "text-white"]
+              :aria-live "polite"
+              :data-role "wallet-key-expiry"}
+        message])
+     (menu-hint hint "wallet-key-expiry-hint")
+     (menu-text-button key-expiry "wallet-renew-trading-key")
+     [:div {:class ["h-px" "w-full" "bg-base-300"]}]]))
+
 (defn- account-selector-section
   [selector]
   (when-let [content (seq (map account-selector/option-row (:options selector)))]
@@ -70,10 +140,12 @@
      content]))
 
 (defn- wallet-menu
-  [{:keys [account-selector agent-error copy-action copy-feedback disconnect-action enable-trading menu-address-label]}]
+  [{:keys [account-mode account-selector agent-error cancel-registration copy-action
+           copy-feedback disconnect-action enable-trading key-expiry menu-address-label]}]
   (let [agent-error-row (wallet-agent-error-row agent-error)
         enable-trading-cta (enable-trading-button enable-trading)]
-    [:div {:class ["ui-dropdown-panel"
+    (into
+     [:div {:class ["ui-dropdown-panel"
                    "absolute"
                    "right-0"
                    "top-full"
@@ -114,26 +186,31 @@
                 (seq (:message copy-feedback)))
        (wallet-copy-feedback-row copy-feedback))
      (when agent-error-row
-       agent-error-row)
-     (when enable-trading-cta
-       enable-trading-cta)
-     (when enable-trading-cta
-       [:div {:class ["h-px" "w-full" "bg-base-300"]}])
-     [:button {:type "button"
-               :class ["block"
-                       "w-full"
-                       "px-3"
-                       "py-3"
-                       "text-left"
-                       "text-sm"
-                       "font-medium"
-                       "text-[#50f6d2]"
-                       "transition-colors"
-                       "hover:bg-base-200"
-                       "focus:outline-none"]
-               :on {:click disconnect-action}
-               :data-role "wallet-menu-disconnect"}
-      "Disconnect"]]))
+       agent-error-row)]
+     ;; Spliced: this repo's Replicant has no fragment tag.
+     (concat
+      (account-mode-rows account-mode)
+      (key-expiry-rows key-expiry)
+      [(when enable-trading-cta
+         enable-trading-cta)]
+      (cancel-registration-rows cancel-registration)
+      [(when enable-trading-cta
+         [:div {:class ["h-px" "w-full" "bg-base-300"]}])
+       [:button {:type "button"
+                 :class ["block"
+                         "w-full"
+                         "px-3"
+                         "py-3"
+                         "text-left"
+                         "text-sm"
+                         "font-medium"
+                         "text-[#50f6d2]"
+                         "transition-colors"
+                         "hover:bg-base-200"
+                         "focus:outline-none"]
+                 :on {:click disconnect-action}
+                 :data-role "wallet-menu-disconnect"}
+        "Disconnect"]]))))
 
 (defn- wallet-trigger
   [{:keys [account-selector trigger-label]}]

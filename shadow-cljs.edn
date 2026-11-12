@@ -71,6 +71,8 @@
                                            hyperopen.views.vaults.startup-preview
                                            hyperopen.vaults.route-runtime-module]
                                  :depends-on #{:charts_shared}}}
+        ;; A released build contacts Hyperliquid only (hyperopen.config).
+        :release {:closure-defines {hyperopen.config/OPTIMIZER_HISTORY_API false}}
         :devtools {:preloads [hyperopen.telemetry.console-preload
                               hyperopen.dev.contracts-preload]
                    :after-load hyperopen.core/reload}}

@@ -169,6 +169,7 @@
             [hyperopen.funding-comparison.actions-test]
             [hyperopen.funding-comparison.effects-test]
             [hyperopen.funding.actions-test]
+            [hyperopen.funding.application.contract-account-moves-test]
             [hyperopen.funding.application.deposit-submit-test]
             [hyperopen.funding.application.hyperevm-review-fixes-test]
             [hyperopen.funding.application.hyperevm-submit-failures-test]
@@ -226,6 +227,7 @@
             [hyperopen.hyperevm.domain.bridge-freshness-test]
             [hyperopen.hyperevm.domain.bridge-test]
             [hyperopen.hyperevm.domain.chain-test]
+            [hyperopen.hyperevm.domain.core-writer-test]
             [hyperopen.hyperevm.domain.fees-test]
             [hyperopen.hyperevm.domain.tokens-test]
             [hyperopen.hyperevm.domain.transfer-state-test]
@@ -1077,8 +1079,12 @@
             [hyperopen.wallet.agent-session-test]
             [hyperopen.wallet.connection-restore-test]
             [hyperopen.wallet.connection-runtime-test]
+            [hyperopen.wallet.contract-account-guards-test]
+            [hyperopen.wallet.contract-account-test]
             [hyperopen.wallet.copy-feedback-runtime-test]
             [hyperopen.wallet.core-test]
+            [hyperopen.wallet.registered-key-lifecycle-test]
+            [hyperopen.wallet.vault-registration-test]
             [hyperopen.websocket.account-surface-service-coverage-test]
             [hyperopen.websocket.acl.hyperliquid-test]
             [hyperopen.websocket.acl.subscription-errors-test]
@@ -1322,6 +1328,7 @@
              'hyperopen.funding-comparison.actions-test
              'hyperopen.funding-comparison.effects-test
              'hyperopen.funding.actions-test
+             'hyperopen.funding.application.contract-account-moves-test
              'hyperopen.funding.application.deposit-submit-test
              'hyperopen.funding.application.hyperevm-review-fixes-test
              'hyperopen.funding.application.hyperevm-submit-failures-test
@@ -1379,6 +1386,7 @@
              'hyperopen.hyperevm.domain.bridge-freshness-test
              'hyperopen.hyperevm.domain.bridge-test
              'hyperopen.hyperevm.domain.chain-test
+             'hyperopen.hyperevm.domain.core-writer-test
              'hyperopen.hyperevm.domain.fees-test
              'hyperopen.hyperevm.domain.tokens-test
              'hyperopen.hyperevm.domain.transfer-state-test
@@ -2230,8 +2238,12 @@
              'hyperopen.wallet.agent-session-test
              'hyperopen.wallet.connection-restore-test
              'hyperopen.wallet.connection-runtime-test
+             'hyperopen.wallet.contract-account-guards-test
+             'hyperopen.wallet.contract-account-test
              'hyperopen.wallet.copy-feedback-runtime-test
              'hyperopen.wallet.core-test
+             'hyperopen.wallet.registered-key-lifecycle-test
+             'hyperopen.wallet.vault-registration-test
              'hyperopen.websocket.account-surface-service-coverage-test
              'hyperopen.websocket.acl.hyperliquid-test
              'hyperopen.websocket.acl.subscription-errors-test

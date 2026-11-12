@@ -138,6 +138,17 @@
   [state]
   (normalize-address (get-in state [:wallet :address])))
 
+(defn contract-account?
+  "True when the connected owner was found to be a contract account on
+   HyperEVM (a Safe, for example). `hyperopen.wallet.contract-account`
+   writes the note this reads."
+  [state]
+  (let [owner (owner-address state)]
+    (boolean
+     (and (some? owner)
+          (= owner (normalize-address
+                    (get-in state [:wallet :contract-account-address])))))))
+
 (defn spectate-address
   [state]
   (normalize-address (get-in state [:account-context :spectate-mode :address])))
