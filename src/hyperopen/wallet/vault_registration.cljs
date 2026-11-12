@@ -246,7 +246,10 @@
   [owner-address]
   (-> (trading-http/post-info! {:type "extraAgents"
                                 :user owner-address})
-      (.then trading-http/parse-json!)
+      ;; Not `parse-json!`: that one checks for the shape of an exchange
+      ;; response, and this answer is a list.
+      (.then (fn [resp] (.json resp)))
+      (.then (fn [payload] (js->clj payload :keywordize-keys true)))
       (.then (fn [rows]
                (if-not (sequential? rows)
                  (js/Promise.reject (js/Error. named-keys-unavailable-message))

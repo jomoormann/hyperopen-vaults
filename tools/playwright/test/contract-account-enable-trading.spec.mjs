@@ -250,6 +250,156 @@ test("a contract account registers its trading key through CoreWriter and keeps 
   expect((await browserKeyStorage(page)).plainSession).toBeNull();
 });
 
+// What the registration record says about the vault's key.
+async function registrationRecord(page) {
+  return page.evaluate((vault) => {
+    const raw = localStorage.getItem(`hyperopen:agent-registration:v1:${vault}`);
+    return raw ? JSON.parse(raw) : null;
+  }, VAULT);
+}
+
+async function sentAgentAddress(page) {
+  await expect
+    .poll(async () => (await walletLog(page)).transactions.length, { timeout: 20_000 })
+    .toBe(1);
+  const [sent] = (await walletLog(page)).requests
+    .filter((request) => request.method === "eth_sendTransaction")
+    .map((request) => request.params[0]);
+  return agentAddressOf(sent.data);
+}
+
+// Reload the page and connect the same account again, as a user does who
+// comes back later. Routes and the virtual authenticator's passkeys stay.
+async function comeBack(page) {
+  await visitRoute(page, "/trade");
+  await debugCall(page, "installWalletSimulator", {
+    accounts: [VAULT],
+    requestAccounts: [VAULT],
+    chainId: HYPEREVM
+  });
+  await debugCall(page, "setWalletConnectedHandlerMode", "suppress");
+  await dispatch(page, [":actions/connect-wallet"]);
+}
+
+test("a registration that waits for other signers survives a reload @regression", async ({ page }) => {
+  test.setTimeout(120_000);
+  const { info } = await connectAccount(page, { code: CONTRACT_CODE });
+
+  await dispatch(page, [":actions/enable-agent-trading"]);
+  const agentAddress = await sentAgentAddress(page);
+  await expect
+    .poll(() => storeValue(page, ["wallet", "agent", "vault-registration", "step"]))
+    .toBe("hyperliquid");
+  const pending = await registrationRecord(page);
+  expect(pending.agentAddress ?? pending["agent-address"]).toBe(agentAddress);
+  expect(pending.registeredAtMs ?? pending["registered-at-ms"] ?? null).toBeNull();
+
+  // The user closes the tab and comes back while the transaction still
+  // waits for signatures.
+  await comeBack(page);
+  await expectOracle(
+    page,
+    "wallet-status",
+    { connected: true, address: VAULT, agentStatus: "approving", agentAddress },
+    { timeoutMs: 20_000 }
+  );
+  expect(await storeValue(page, ["wallet", "agent", "vault-registration", "step"])).toBe(
+    "hyperliquid"
+  );
+  // Nothing new is asked of the wallet: the same registration is waited for.
+  expect((await walletLog(page)).transactions.length).toBe(0);
+
+  // The other signers execute it. The key is registered, and still locked.
+  info.userRoles[agentAddress] = { role: "agent", data: { user: VAULT } };
+  await expectOracle(
+    page,
+    "wallet-status",
+    { connected: true, agentStatus: "locked", agentAddress },
+    { timeoutMs: 30_000 }
+  );
+  const registered = await registrationRecord(page);
+  expect(registered.registeredAtMs ?? registered["registered-at-ms"]).toBeGreaterThan(0);
+
+  // The passkey that was made before the transaction unlocks it.
+  await dispatch(page, [":actions/unlock-agent-trading"]);
+  await expectOracle(
+    page,
+    "wallet-status",
+    { connected: true, agentStatus: "ready", agentAddress, agentError: null },
+    { timeoutMs: 20_000 }
+  );
+
+  // Disconnecting does not throw the key away: it costs signatures to get.
+  await dispatch(page, [":actions/disconnect-wallet"]);
+  await expectOracle(page, "wallet-status", { connected: false });
+  expect((await browserKeyStorage(page)).passkeyMetadata).not.toBeNull();
+  await dispatch(page, [":actions/connect-wallet"]);
+  await expectOracle(
+    page,
+    "wallet-status",
+    { connected: true, agentStatus: "locked", agentAddress },
+    { timeoutMs: 20_000 }
+  );
+});
+
+test("a waiting registration can be cancelled, which removes the stored key @regression", async ({ page }) => {
+  test.setTimeout(90_000);
+  await connectAccount(page, { code: CONTRACT_CODE });
+
+  await dispatch(page, [":actions/enable-agent-trading"]);
+  await sentAgentAddress(page);
+  await expect
+    .poll(() => storeValue(page, ["wallet", "agent", "vault-registration", "step"]))
+    .toBe("hyperliquid");
+
+  await dispatch(page, [":actions/cancel-agent-registration"]);
+
+  await expectOracle(
+    page,
+    "wallet-status",
+    { connected: true, agentStatus: "not-ready", agentAddress: null },
+    { timeoutMs: 20_000 }
+  );
+  expect(await storeValue(page, ["wallet", "agent", "error"])).toMatch(/cancelled on this device/i);
+  await expect.poll(async () => (await browserKeyStorage(page)).everything).not.toContain("ciphertext");
+  const storage = await browserKeyStorage(page);
+  expect(storage.passkeyMetadata).toBeNull();
+  expect(await registrationRecord(page)).toBeNull();
+
+  // And it stays cancelled after a reload.
+  await comeBack(page);
+  await expectOracle(
+    page,
+    "wallet-status",
+    { connected: true, address: VAULT, agentStatus: "not-ready" },
+    { timeoutMs: 20_000 }
+  );
+});
+
+test("a registration that cannot fit the named-key limit is refused before anyone signs @regression", async ({ page }) => {
+  const { info } = await connectAccount(page, { code: CONTRACT_CODE });
+  info.extraAgents = {
+    [VAULT]: [
+      { name: "Bot A", address: "0x00000000000000000000000000000000000000a1", validUntil: 1 },
+      { name: "Bot B", address: "0x00000000000000000000000000000000000000b2", validUntil: 1 },
+      { name: "Bot C", address: "0x00000000000000000000000000000000000000c3", validUntil: 1 }
+    ]
+  };
+
+  await dispatch(page, [":actions/enable-agent-trading"]);
+
+  await expectOracle(
+    page,
+    "wallet-status",
+    { connected: true, agentStatus: "error", agentAddress: null },
+    { timeoutMs: 20_000 }
+  );
+  expect(await storeValue(page, ["wallet", "agent", "error"])).toMatch(/already has 3 named trading keys/);
+  expect((await walletLog(page)).transactions.length).toBe(0);
+  expect((await browserKeyStorage(page)).passkeyMetadata).toBeNull();
+  expect(await registrationRecord(page)).toBeNull();
+});
+
 test("a refused registration leaves no key behind @regression", async ({ page }) => {
   await connectAccount(page, {
     code: CONTRACT_CODE,

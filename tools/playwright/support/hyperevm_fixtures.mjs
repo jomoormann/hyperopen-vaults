@@ -830,6 +830,10 @@ export function answerHyperCoreInfo(fixture, payload) {
       return fixture.clearinghouseStates[user] || clearinghouseState();
     case "userRole":
       return fixture.userRoles[user] || { role: "missing" };
+    case "extraAgents":
+      // `fixture.extraAgents` maps a lowercase owner to its named API
+      // wallets; an owner without an entry has none.
+      return fixture.extraAgents?.[user] ?? [];
     case "userAbstraction":
       return fixture.userAbstractions[user] || "default";
     case "subAccounts":
