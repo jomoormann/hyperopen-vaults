@@ -6,7 +6,10 @@
             [hyperopen.runtime.state :as runtime-state]
             [hyperopen.trading-crypto-modules :as trading-crypto-modules]
             [hyperopen.wallet.agent-lockbox :as agent-lockbox]
-            [hyperopen.wallet.agent-session :as agent-session]))
+            [hyperopen.wallet.agent-session :as agent-session]
+            [hyperopen.wallet.contract-account :as contract-account]
+            [hyperopen.wallet.key-backup :as key-backup]
+            [hyperopen.wallet.registration-record :as registration-record]))
 
 (defn safe-private-key->agent-address
   ([private-key]
@@ -23,8 +26,17 @@
 (defn- missing-api-wallet-session-disposition!
   [owner-address session]
   (let [agent-address* (http/normalize-address (:agent-address session))]
-    (if-not (seq agent-address*)
+    (cond
+      (not (seq agent-address*))
       (js/Promise.resolve :invalidate)
+
+      ;; A contract account's key that still waits for its registration
+      ;; transaction is expected to be unknown to Hyperliquid. Throwing it
+      ;; away would waste the signatures being collected for it.
+      (registration-record/pending-registration-for? owner-address agent-address*)
+      (js/Promise.resolve :inconclusive)
+
+      :else
       (-> (http/fetch-user-role! agent-address*)
           (.then (fn [role-response]
                    (if (http/user-role-agent-for-owner? owner-address role-response)
@@ -133,6 +145,10 @@
                (= :passkey local-protection-mode))
       (agent-lockbox/delete-locked-session! owner-address))
     (agent-lockbox/clear-unlocked-session! owner-address)
+    ;; Hyperliquid no longer knows the key (removed, replaced or expired),
+    ;; so nothing about its registration is worth keeping either.
+    (registration-record/clear-record! owner-address)
+    (key-backup/drop! owner-address)
     (swap! store assoc-in [:wallet :agent]
            (assoc (agent-session/default-agent-state :storage-mode storage-mode
                                                      :local-protection-mode local-protection-mode
@@ -258,15 +274,52 @@
     (js/Promise.reject
      (js/Error. "Refusing to send a testnet-signed action to the mainnet exchange."))))
 
+(def contract-account-trading-action-types
+  "What the trading key of a contract account signs in this app: placing,
+   changing and cancelling orders, and the margin settings of a position.
+
+   Hyperliquid does not limit a trading key, so this is not a security
+   boundary. It keeps the app itself from using the key for anything that
+   moves funds (vault and sub-account transfers, borrow and lend) or changes
+   the account (sub-accounts, referrals, rewards). A contract account does
+   those with a transaction that its own signers and roles decide on."
+  #{"order" "cancel" "cancelByCloid" "modify" "batchModify"
+    "twapOrder" "twapCancel" "scheduleCancel"
+    "updateLeverage" "updateIsolatedMargin"})
+
+(def contract-account-agent-action-message
+  "A contract account's trading key only places and manages orders. Do this from the account itself.")
+
+(defn- action-type
+  [action]
+  (some-> (cond
+            (map? action) (or (:type action) (get action "type"))
+            (some? action) (unchecked-get action "type"))
+          str))
+
+(defn contract-account-action-allowed?
+  [owner-address action]
+  (or (not (true? (contract-account/known-contract-account? owner-address)))
+      (contains? contract-account-trading-action-types (action-type action))))
+
+(defn- contract-account-action-rejection
+  [owner-address action]
+  (when-not (contract-account-action-allowed? owner-address action)
+    (js/Promise.reject (js/Error. contract-account-agent-action-message))))
+
 (defn resolve-signing-context!
   "Promise of {:crypto :session} for a ready agent session, or a rejection with
-  the same messages `sign-and-post-agent-action!` uses."
-  [store owner-address]
-  (-> (trading-crypto-modules/load-trading-crypto-module!)
-      (.then (fn [crypto]
-               (let [session (resolve-agent-session store owner-address crypto)]
-                 (or (missing-agent-session-rejection store session)
-                     {:crypto crypto :session session}))))))
+  the same messages `sign-and-post-agent-action!` uses. With `action`, also
+  refuses what a contract account's key must not sign."
+  ([store owner-address]
+   (-> (trading-crypto-modules/load-trading-crypto-module!)
+       (.then (fn [crypto]
+                (let [session (resolve-agent-session store owner-address crypto)]
+                  (or (missing-agent-session-rejection store session)
+                      {:crypto crypto :session session}))))))
+  ([store owner-address action]
+   (or (contract-account-action-rejection owner-address action)
+       (resolve-signing-context! store owner-address))))
 
 (defn sign-action!
   [crypto session action nonce options]
@@ -291,6 +344,7 @@
    (let [options (normalize-agent-action-options raw-options)]
      (or
       (network-mismatch-rejection options)
+      (contract-account-action-rejection owner-address action)
       (-> (trading-crypto-modules/load-trading-crypto-module!)
           (.then
            (fn [crypto]

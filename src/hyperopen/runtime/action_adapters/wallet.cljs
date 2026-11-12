@@ -12,6 +12,7 @@
             [hyperopen.wallet.agent-session :as agent-session]
             [hyperopen.wallet.connection-runtime :as wallet-connection-runtime]
             [hyperopen.wallet.contract-account :as contract-account]
+            [hyperopen.wallet.key-backup :as key-backup]
             [hyperopen.wallet.vault-registration :as vault-registration]))
 
 (def connect-wallet-action wallet-actions/connect-wallet-action)
@@ -97,11 +98,16 @@
               agent-session/default-signature-chain-id-for-environment
               :build-approve-agent-action agent-session/build-approve-agent-action
               :format-agent-name-with-valid-until agent-session/format-agent-name-with-valid-until
-              :approve-agent! vault-registration/approve-agent!
+              ;; The key this device trades with: its registration is
+              ;; recorded, so the wait survives a reload.
+              :approve-agent! vault-registration/approve-own-agent!
               :persist-agent-session-by-mode! agent-session/persist-agent-session-by-mode!
               :clear-agent-session-by-mode! agent-session/clear-agent-session-by-mode!
               :clear-unlocked-session! agent-lockbox/clear-unlocked-session!
               :clear-passkey-session-metadata! agent-session/clear-passkey-session-metadata!
+              :backup-stored-key! key-backup/backup!
+              :restore-stored-key! key-backup/restore!
+              :drop-key-backup! key-backup/drop!
               :runtime-error-message agent-runtime/runtime-error-message
               :exchange-response-error agent-runtime/exchange-response-error}))
           (enable! [contract-account?]

@@ -212,6 +212,8 @@
 
 (def unlock-agent-trading wallet-adapters/unlock-agent-trading)
 
+(def cancel-agent-registration wallet-adapters/cancel-agent-registration)
+
 (def copy-wallet-address wallet-adapters/copy-wallet-address)
 
 (def make-copy-wallet-address wallet-adapters/make-copy-wallet-address)

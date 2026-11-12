@@ -132,6 +132,14 @@
       (js/Promise.reject
        (errors/known-error persist-session-error)))))
 
+(defn- restored-key-error
+  "`err`, marked to say that the key the account used before is back in
+   place and locked."
+  [err metadata]
+  (let [err* (if (instance? js/Error err) err (js/Error. (str err)))]
+    (unchecked-set err* "restoredKeyMetadata" metadata)
+    err*))
+
 (defn- lock-then-approve!
   "The order for an account whose approval is not instant (a contract
    account whose registration may wait for other signers): store the key
@@ -141,7 +149,11 @@
    said OK. Here the user may be in another tab or window while the
    approval is pending. A passkey prompt at that point would fail, because
    the browser only shows one for a focused page, and the approved key would
-   be lost. When the approval fails, the stored key is removed again."
+   be lost.
+
+   Storing the new key overwrites the one the account trades with now, so
+   that one is set aside first. When the approval fails, the new key is
+   removed and the old one is put back."
   [{:keys [owner-address
            storage-mode
            local-protection-mode
@@ -152,7 +164,10 @@
            clear-agent-session-by-mode!
            clear-unlocked-session!
            clear-passkey-session-metadata!
-           delete-locked-session!]}]
+           delete-locked-session!
+           backup-stored-key!
+           restore-stored-key!
+           drop-key-backup!]}]
   (let [locked-at (now-ms-fn)
         discard-stored-key!
         (fn []
@@ -164,19 +179,42 @@
             (do
               (clear-passkey-session-metadata! owner-address)
               (ignore-delete-failure! (delete-locked-session! owner-address)))
-            (js/Promise.resolve nil)))]
-    (-> (persist! {:last-approved-at locked-at
-                   :nonce-cursor locked-at})
+            (js/Promise.resolve nil)))
+        restore-and-reject!
+        (fn [err]
+          (-> (restore-stored-key! owner-address)
+              (.then (fn [metadata]
+                       (js/Promise.reject
+                        (if (map? metadata)
+                          (restored-key-error err metadata)
+                          err))))))
+        fail!
+        (fn [err]
+          (-> (discard-stored-key!)
+              (.then (fn [_] (restore-and-reject! err)))))]
+    (-> (backup-stored-key! owner-address)
+        (.then (fn [_]
+                 (-> (persist! {:last-approved-at locked-at
+                                :nonce-cursor locked-at})
+                     ;; The new key was not stored (the passkey prompt was
+                     ;; dismissed, for example), so there is nothing of it
+                     ;; to remove. The old key may have been overwritten on
+                     ;; the way, so it is put back from what was set aside.
+                     (.catch restore-and-reject!))))
         (.then
          (fn [session]
-           (when session
+           (if-not session
+             ;; Another operation took over while the key was being stored.
+             (-> (restore-stored-key! owner-address)
+                 (.then (fn [_] nil)))
              (-> (approve!)
-                 (.then (fn [_] session))
+                 (.then (fn [_]
+                          (drop-key-backup! owner-address)
+                          session))
                  (.catch
                   (fn [err]
                     (if (current-operation?)
-                      (-> (discard-stored-key!)
-                          (.then (fn [_] (js/Promise.reject err))))
+                      (fail! err)
                       (js/Promise.reject err)))))))))))
 
 (defn enable-agent-trading!
@@ -200,6 +238,9 @@
            clear-agent-session-by-mode!
            clear-unlocked-session!
            clear-passkey-session-metadata!
+           backup-stored-key!
+           restore-stored-key!
+           drop-key-backup!
            runtime-error-message
            exchange-response-error]
     :or {normalize-storage-mode identity
@@ -211,6 +252,9 @@
          persist-passkey-session-metadata! (constantly false)
          delete-locked-session! noop-promise
          clear-passkey-session-metadata! noop
+         backup-stored-key! noop-promise
+         restore-stored-key! noop-promise
+         drop-key-backup! noop
          runtime-error-message errors/runtime-error-message
          exchange-response-error errors/exchange-response-error}}]
   (let [{:keys [storage-mode local-protection-mode is-mainnet agent-name signature-chain-id
@@ -294,7 +338,10 @@
                     :clear-agent-session-by-mode! clear-agent-session-by-mode!
                     :clear-unlocked-session! clear-unlocked-session!
                     :clear-passkey-session-metadata! clear-passkey-session-metadata!
-                    :delete-locked-session! delete-locked-session!})
+                    :delete-locked-session! delete-locked-session!
+                    :backup-stored-key! backup-stored-key!
+                    :restore-stored-key! restore-stored-key!
+                    :drop-key-backup! drop-key-backup!})
                   (-> (approve!)
                       (.then persist!)))]
             (-> enabled-session
@@ -307,8 +354,23 @@
                 (.catch
                  (fn [err]
                    (when (current-operation?)
-                     (state/set-agent-error!
-                      store
-                      (errors/known-or-runtime-error-message runtime-error-message err))))))))
+                     (let [message (errors/known-or-runtime-error-message
+                                    runtime-error-message
+                                    err)
+                           restored (when (some? err)
+                                      (unchecked-get err "restoredKeyMetadata"))]
+                       (if (map? restored)
+                         ;; The key used before is back, locked.
+                         (swap! store update-in [:wallet :agent]
+                                (fn [agent-state]
+                                  (-> agent-state
+                                      (merge (state/metadata->ready-session
+                                              restored
+                                              normalized-storage-mode
+                                              normalized-local-protection-mode)
+                                             {:status :locked
+                                              :error message})
+                                      (dissoc :active-enable-token))))
+                         (state/set-agent-error! store message)))))))))
         (catch :default err
           (state/set-agent-error! store (runtime-error-message err)))))))

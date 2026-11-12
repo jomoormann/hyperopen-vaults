@@ -41,6 +41,40 @@
     (is (= "Awaiting registration..." (label :hyperliquid)))
     (is (= "Awaiting signature..." (label nil)))))
 
+(deftest header-vm-offers-a-way-out-of-a-waiting-registration-test
+  (let [wallet-vm (fn [agent-state]
+                    (:wallet (vm/header-vm {:wallet {:connected? true
+                                                     :address connected-address
+                                                     :agent agent-state}})))
+        waiting (wallet-vm {:status :approving
+                            :vault-registration {:step :hyperliquid}})]
+    (is (= "Cancel registration" (get-in waiting [:cancel-registration :label])))
+    (is (= [[:actions/cancel-agent-registration]]
+           (get-in waiting [:cancel-registration :action])))
+    (is (true? (get-in waiting [:enable-trading :disabled?])))
+    (is (nil? (:cancel-registration (wallet-vm {:status :approving
+                                                :vault-registration {:step :wallet}})))
+        "while the wallet is asking, the wallet is where to cancel")
+    (is (nil? (:cancel-registration (wallet-vm {:status :approving}))))
+    (is (nil? (:cancel-registration (wallet-vm {:status :ready}))))))
+
+(deftest header-vm-asks-for-a-renewal-near-the-key-expiry-test
+  (let [expiry (fn [status days-left]
+                 (get-in (vm/header-vm {:wallet {:connected? true
+                                                 :address connected-address
+                                                 :agent {:status status
+                                                         :key-expiry {:days-left days-left}}}})
+                         [:wallet :key-expiry]))]
+    (is (nil? (expiry :ready 15)))
+    (is (= "The trading key expires in 14 days." (:message (expiry :ready 14))))
+    (is (= "The trading key expires in 1 day." (:message (expiry :locked 1))))
+    (is (= "The trading key expires today." (:message (expiry :ready 0))))
+    (is (= "The trading key has expired." (:message (expiry :locked -2))))
+    (is (= [[:actions/enable-agent-trading]] (:action (expiry :ready 3))))
+    (is (= "Renew trading key" (:label (expiry :ready 3))))
+    (is (nil? (expiry :approving 3)) "a renewal is already under way")
+    (is (nil? (expiry :ready nil)) "a key without an expiry")))
+
 (deftest header-vm-projects-wallet-enable-trading-state-test
   (let [approving-vm (vm/header-vm {:wallet {:connected? true
                                              :address connected-address

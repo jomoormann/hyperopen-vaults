@@ -2,7 +2,8 @@
   (:require [clojure.string :as str]
             [hyperopen.wallet.agent-lockbox :as agent-lockbox]
             [hyperopen.wallet.agent-session :as agent-session]
-            [hyperopen.wallet.provider-registry :as provider-registry]))
+            [hyperopen.wallet.provider-registry :as provider-registry]
+            [hyperopen.wallet.registration-record :as registration-record]))
 
 ;; ---------- Provider helpers -------------------------------------------------
 
@@ -103,12 +104,19 @@
    (get-in wallet-state [:agent :local-protection-mode])))
 
 (defn- clear-persisted-agent-session!
+  "Forget the stored trading key of `wallet-address` when the wallet
+   disconnects or switches account.
+
+   A key that a contract account registered with a transaction is kept
+   (`hyperopen.wallet.registration-record`): it stays locked behind its
+   passkey, and getting a new one would cost another round of signatures."
   [wallet-address storage-mode local-protection-mode]
-  (agent-session/clear-persisted-agent-session! wallet-address
-                                                storage-mode
-                                                local-protection-mode)
-  (when (= :passkey (agent-session/normalize-local-protection-mode local-protection-mode))
-    (agent-lockbox/delete-locked-session! wallet-address)))
+  (when-not (registration-record/keeps-key? wallet-address)
+    (agent-session/clear-persisted-agent-session! wallet-address
+                                                  storage-mode
+                                                  local-protection-mode)
+    (when (= :passkey (agent-session/normalize-local-protection-mode local-protection-mode))
+      (agent-lockbox/delete-locked-session! wallet-address))))
 
 (defn- load-persisted-agent-session
   [wallet-address storage-mode local-protection-mode]
@@ -122,16 +130,35 @@
                                                            local-protection-mode)))
 
 (defn- persisted-session->agent-state
-  [persisted storage-mode local-protection-mode]
+  [wallet-address persisted storage-mode local-protection-mode]
   (if (and (map? persisted)
            (seq (:agent-address persisted)))
-    {:status (if (= :locked (:persisted-kind persisted)) :locked :ready)
-     :agent-address (:agent-address persisted)
-     :storage-mode storage-mode
-     :local-protection-mode local-protection-mode
-     :last-approved-at (:last-approved-at persisted)
-     :error nil
-     :nonce-cursor (:nonce-cursor persisted)}
+    (let [awaiting-registration?
+          (registration-record/pending-registration-for? wallet-address
+                                                         (:agent-address persisted))
+          key-expiry
+          (registration-record/key-expiry-for wallet-address
+                                              (:agent-address persisted)
+                                              (.now js/Date))]
+      (cond-> {:status (cond
+                         awaiting-registration? :approving
+                         (= :locked (:persisted-kind persisted)) :locked
+                         :else :ready)
+               :agent-address (:agent-address persisted)
+               :storage-mode storage-mode
+               :local-protection-mode local-protection-mode
+               :last-approved-at (:last-approved-at persisted)
+               :error nil
+               :nonce-cursor (:nonce-cursor persisted)}
+        ;; The key is stored, but Hyperliquid has not registered it yet
+        ;; (`hyperopen.wallet.vault-registration/resume!` keeps waiting).
+        awaiting-registration?
+        (assoc :vault-registration {:step :hyperliquid
+                                    :agent-address (str/lower-case
+                                                    (:agent-address persisted))})
+
+        key-expiry
+        (assoc :key-expiry key-expiry)))
     (agent-session/default-agent-state :storage-mode storage-mode
                                        :local-protection-mode local-protection-mode)))
 
@@ -166,8 +193,15 @@
   (swap! store update-in [:wallet]
          (fn [wallet-state]
            (let [previous-address (:address wallet-state)
-                 storage-mode (current-agent-storage-mode wallet-state)
-                 local-protection-mode (current-agent-local-protection-mode wallet-state)
+                 previous-storage-mode (current-agent-storage-mode wallet-state)
+                 previous-local-protection-mode (current-agent-local-protection-mode wallet-state)
+                 ;; A key registered by transaction is always a passkey-locked
+                 ;; local key, whatever the last account preferred.
+                 keeps-key? (registration-record/keeps-key? addr)
+                 storage-mode (if keeps-key? :local previous-storage-mode)
+                 local-protection-mode (if keeps-key?
+                                         :passkey
+                                         previous-local-protection-mode)
                  passkey-supported? (true? (get-in wallet-state [:agent :passkey-supported?]))
                  previous-address* (some-> previous-address str str/lower-case)
                  next-address* (some-> addr str str/lower-case)]
@@ -175,8 +209,8 @@
                         (seq next-address*)
                         (not= previous-address* next-address*))
                (clear-persisted-agent-session! previous-address
-                                              storage-mode
-                                              local-protection-mode)
+                                              previous-storage-mode
+                                              previous-local-protection-mode)
                (agent-lockbox/clear-unlocked-session! previous-address))
              (let [persisted (load-persisted-agent-session addr
                                                            storage-mode
@@ -186,7 +220,8 @@
                            :address addr
                            :connecting? false
                            :error nil})
-                   (assoc :agent (persisted-session->agent-state persisted
+                   (assoc :agent (persisted-session->agent-state addr
+                                                                 persisted
                                                                  storage-mode
                                                                  local-protection-mode))
                    (assoc-in [:agent :passkey-supported?] passkey-supported?))))))

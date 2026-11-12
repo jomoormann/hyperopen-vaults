@@ -1082,6 +1082,7 @@
             [hyperopen.wallet.contract-account-test]
             [hyperopen.wallet.copy-feedback-runtime-test]
             [hyperopen.wallet.core-test]
+            [hyperopen.wallet.registered-key-lifecycle-test]
             [hyperopen.wallet.vault-registration-test]
             [hyperopen.websocket.account-surface-service-coverage-test]
             [hyperopen.websocket.acl.hyperliquid-test]
@@ -2239,6 +2240,7 @@
              'hyperopen.wallet.contract-account-test
              'hyperopen.wallet.copy-feedback-runtime-test
              'hyperopen.wallet.core-test
+             'hyperopen.wallet.registered-key-lifecycle-test
              'hyperopen.wallet.vault-registration-test
              'hyperopen.websocket.account-surface-service-coverage-test
              'hyperopen.websocket.acl.hyperliquid-test

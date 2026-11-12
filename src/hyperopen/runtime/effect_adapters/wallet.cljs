@@ -10,7 +10,8 @@
             [hyperopen.wallet.connection-runtime :as wallet-connection-runtime]
             [hyperopen.wallet.contract-account :as contract-account]
             [hyperopen.wallet.copy-feedback-runtime :as wallet-copy-runtime]
-            [hyperopen.wallet.core :as wallet]))
+            [hyperopen.wallet.core :as wallet]
+            [hyperopen.wallet.vault-registration :as vault-registration]))
 
 (defn connect-wallet
   ([_ store]
@@ -130,6 +131,12 @@
                     (dispatch-after-success-actions! store after-success-actions)
                     result)))
        unlock-result))))
+
+(defn cancel-agent-registration
+  "Stop waiting for the contract account's key registration and remove the
+   key stored for it."
+  [_ store]
+  (vault-registration/cancel-registration! store))
 
 (defn- set-wallet-copy-feedback!
   [store kind message]

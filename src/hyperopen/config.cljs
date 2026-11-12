@@ -17,6 +17,10 @@
 ;; included. Reporting never implies placement permission.
 (goog-define VOL_RANGE_REPORTING true)
 
+;; Minutes without a pointer or key event after which a contract account's
+;; trading key is locked again (hyperopen.wallet.idle-lock). 0 turns it off.
+(goog-define AGENT_IDLE_LOCK_MINUTES 30)
+
 (def config
   {:ws-url "wss://api.hyperliquid.xyz/ws"
    :icon-service-worker-path "/sw.js"

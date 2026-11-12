@@ -115,7 +115,7 @@
                                    (resolve (not-sent :pre-send-timeout
                                                       {:error "Timed out before sending."}))))
                                (or pre-send-timeout-ms default-pre-send-timeout-ms)))))
-      (-> (agent-actions/resolve-signing-context! store owner-address)
+      (-> (agent-actions/resolve-signing-context! store owner-address action)
           (.then
            (fn [{:keys [crypto session]}]
              (-> (nonce-coordinator/reserve-nonce! {:network network

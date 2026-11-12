@@ -7,6 +7,7 @@
    [:effects/set-agent-storage-mode :set-agent-storage-mode]
    [:effects/set-agent-local-protection-mode :set-agent-local-protection-mode]
    [:effects/unlock-agent-trading :unlock-agent-trading]
+   [:effects/cancel-agent-registration :cancel-agent-registration]
    [:effects/copy-wallet-address :copy-wallet-address]
    [:effects/apply-ui-theme :apply-ui-theme]])
 
@@ -42,6 +43,7 @@
    [:actions/enable-agent-trading :enable-agent-trading-action]
    [:actions/unlock-agent-trading :unlock-agent-trading-action]
    [:actions/close-agent-recovery-modal :close-agent-recovery-modal-action]
+   [:actions/cancel-agent-registration :cancel-agent-registration-action]
    [:actions/set-agent-storage-mode :set-agent-storage-mode-action]
    [:actions/set-agent-local-protection-mode :set-agent-local-protection-mode-action]
    [:actions/copy-wallet-address :copy-wallet-address-action]])

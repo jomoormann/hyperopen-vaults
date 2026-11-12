@@ -112,6 +112,33 @@
                    :unlocking :actions/unlock-agent-trading
                    :actions/enable-agent-trading)]]})))
 
+(defn- cancel-registration-vm
+  "A contract account's registration can wait for other signers for days,
+   so the user needs a way out of it."
+  [agent-state]
+  (when (and (= :approving (:status agent-state))
+             (= :hyperliquid (get-in agent-state [:vault-registration :step])))
+    {:label "Cancel registration"
+     :hint "The trading key is stored on this device. Trading starts when the transaction is executed."
+     :action [[:actions/cancel-agent-registration]]}))
+
+(defn- key-expiry-vm
+  "A contract account's key is registered for a limited time. Near the end
+   the account needs a new one, which takes another transaction."
+  [agent-state]
+  (let [days-left (get-in agent-state [:key-expiry :days-left])]
+    (when (and (#{:ready :locked} (:status agent-state))
+               (number? days-left)
+               (<= days-left 14))
+      {:message (cond
+                  (neg? days-left) "The trading key has expired."
+                  (zero? days-left) "The trading key expires today."
+                  (= 1 days-left) "The trading key expires in 1 day."
+                  :else (str "The trading key expires in " days-left " days."))
+       :hint "Trading pauses until the new key is registered."
+       :label "Renew trading key"
+       :action [[:actions/enable-agent-trading]]})))
+
 (defn- wallet-vm
   [state]
   (let [wallet-state (get-in state [:wallet] {})
@@ -127,6 +154,8 @@
      :disconnect-action [[:actions/disconnect-wallet]]
      :agent-error (some-> wallet-state :agent :error str not-empty)
      :enable-trading (enable-trading-vm (:agent wallet-state))
+     :cancel-registration (cancel-registration-vm (:agent wallet-state))
+     :key-expiry (key-expiry-vm (:agent wallet-state))
      :connect-action [[:actions/connect-wallet]]}))
 
 (defn- trading-settings-storage-mode

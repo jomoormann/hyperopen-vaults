@@ -26,7 +26,18 @@
             [hyperopen.trading-indicators-modules :as trading-indicators-modules]
             [hyperopen.ui.preferences :as ui-preferences]
             [hyperopen.vaults.infrastructure.persistence :as vault-persistence]
-            [hyperopen.wallet.core :as wallet]))
+            [hyperopen.wallet.core :as wallet]
+            [hyperopen.wallet.idle-lock :as idle-lock]
+            [hyperopen.wallet.vault-registration :as vault-registration]))
+
+(defn- init-wallet!
+  "Connect the wallet layer, then pick up what a contract account left
+   behind: a key registration that is still waiting for signatures, and the
+   idle lock of its key."
+  [store]
+  (wallet/init-wallet! store)
+  (vault-registration/install-resume! store)
+  (idle-lock/install! store))
 
 (declare init-router!)
 
@@ -331,7 +342,7 @@
        :restore-order-history-pagination-settings! order-actions/restore-order-history-pagination-settings!
        :set-on-connected-handler! wallet/set-on-connected-handler!
        :handle-wallet-connected runtime-action-adapters/handle-wallet-connected
-       :init-wallet! wallet/init-wallet!
+       :init-wallet! init-wallet!
        :init-router! (fn [startup-store]
                        (init-router!
                         startup-store
