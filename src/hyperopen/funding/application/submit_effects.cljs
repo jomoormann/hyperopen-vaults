@@ -10,7 +10,7 @@
   "Sent to your wallet. It applies when the transaction is executed.")
 
 (def contract-account-usdc-only-message
-  "A contract account can only move USDC between HyperEVM and Spot here.")
+  "A contract account can't move this token from HyperEVM here.")
 
 (defn- spectate-mode-submit-error
   [store]
@@ -245,9 +245,10 @@
                       (set-funding-submit-error! store show-toast! message))))))))
 
 (defn- submit-contract-account-deposit!
-  "A contract account's HyperEVM -> Spot move of USDC: the approval for
-   exactly the amount and the deposit, handed to the wallet one after the
-   other. Nothing here waits for a receipt, because a contract wallet's
+  "A contract account's HyperEVM -> Spot move: for USDC the approval for
+   exactly the amount and the deposit, for HYPE and other linked tokens one
+   transfer to the token's system address, handed to the wallet one after
+   the other. Nothing here waits for a receipt, because a contract wallet's
    transactions may be executed hours later, by someone else. The deposit
    credits the sender, so the funds stay in the same account."
   [{:keys [store
@@ -265,13 +266,21 @@
         action (:action request)
         refusal (or (account-context/hyperevm-moves-blocked-message state)
                     (transfer-invariants/check-request state request)
-                    (when-not (= "usdcCoreDeposit" (:kind action))
+                    (when-not (contains? #{"usdcCoreDeposit" "native" "erc20"} (:kind action))
                       contract-account-usdc-only-message)
                     (when-not (fn? send-contract-account-transactions!)
                       "Transfers from HyperEVM aren't available right now."))
+        ;; Every kind credits the sender's own Spot balance: USDC through
+        ;; Circle's CoreDepositWallet (approval for exactly the amount, then
+        ;; the deposit), HYPE as value sent to its system address, any other
+        ;; linked token as a transfer to its system address. The invariant
+        ;; check above has already matched recipient and token.
         plan (when-not refusal
-               [(txs/usdc-approve-tx owner action)
-                (txs/usdc-core-deposit-tx owner action)])]
+               (case (:kind action)
+                 "usdcCoreDeposit" [(txs/usdc-approve-tx owner action)
+                                    (txs/usdc-core-deposit-tx owner action)]
+                 "native" [(txs/native-to-core-tx owner action)]
+                 "erc20" [(txs/erc20-to-core-tx owner action)]))]
     (cond
       (seq refusal)
       (set-funding-submit-error! store show-toast! refusal)

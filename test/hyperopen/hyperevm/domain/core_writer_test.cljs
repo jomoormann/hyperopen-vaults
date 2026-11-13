@@ -167,3 +167,62 @@
     (is (nil? (core-writer/encode-spot-usdc-to-evm "0")))
     (is (nil? (core-writer/encode-spot-usdc-to-evm "-5")))
     (is (nil? (core-writer/encode-spot-usdc-to-evm nil)))))
+
+;; viem 2.57.7 on 2026-11-12: encodeFunctionData(sendRawAction, [concat([0x01,
+;; actionId (3 bytes), encodeAbiParameters(fields, values)])]).
+
+(def ^:private send-asset-viem-calldata
+  ;; (0x2000…0000, 0x0, 4294967295, 4294967295, 0, 20000000)
+  "0x17938e13000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000c40100000d0000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff00000000000000000000000000000000000000000000000000000000ffffffff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001312d0000000000000000000000000000000000000000000000000000000000")
+
+(def ^:private token-delegate-viem-calldata
+  ;; (0x3333…3334, 100000000, true)
+  "0x17938e13000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000640100000300000000000000000000000033333333333333333333333333333333333333340000000000000000000000000000000000000000000000000000000005f5e100000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000")
+
+(def ^:private staking-deposit-viem-calldata
+  ;; (250000000)
+  "0x17938e130000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000002401000004000000000000000000000000000000000000000000000000000000000ee6b28000000000000000000000000000000000000000000000000000000000")
+
+(def ^:private staking-withdraw-viem-calldata
+  ;; (1)
+  "0x17938e130000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000002401000005000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000")
+
+(deftest send-asset-matches-the-viem-vector-test
+  (is (= {:to core-writer/core-writer-address
+          :data send-asset-viem-calldata
+          :chainId "0x3e7"}
+         (core-writer/send-asset-tx {:destination "0x2000000000000000000000000000000000000000"
+                                     :source-dex (core-writer/spot-dex-id)
+                                     :destination-dex (core-writer/spot-dex-id)
+                                     :token 0
+                                     :wei (js/BigInt 20000000)})))
+  (is (= (core-writer/encode-spot-usdc-to-evm "0.2")
+         (:data (core-writer/send-asset-tx {:destination core-writer/usdc-system-address
+                                            :source-dex (core-writer/spot-dex-id)
+                                            :destination-dex (core-writer/spot-dex-id)
+                                            :token 0
+                                            :wei 20000000})))
+      "the general encoder agrees with the fixed USDC one"))
+
+(deftest send-asset-refuses-what-does-not-fit-test
+  (let [ok {:destination "0x2000000000000000000000000000000000000000"
+            :source-dex 0 :destination-dex 0 :token 0 :wei 1}]
+    (is (some? (core-writer/send-asset-tx ok)))
+    (doseq [bad [(assoc ok :destination "0x12")
+                 (assoc ok :sub-account "nope")
+                 (assoc ok :source-dex 4294967296)
+                 (assoc ok :destination-dex -1)
+                 (assoc ok :wei 0)
+                 (assoc ok :wei "1.5")
+                 (assoc ok :wei (js/BigInt "18446744073709551616"))]]
+      (is (nil? (core-writer/send-asset-tx bad)) (pr-str bad)))))
+
+(deftest staking-and-delegation-match-the-viem-vectors-test
+  (is (= staking-deposit-viem-calldata (:data (core-writer/staking-deposit-tx 250000000))))
+  (is (= staking-withdraw-viem-calldata (:data (core-writer/staking-withdraw-tx "1"))))
+  (is (= token-delegate-viem-calldata
+         (:data (core-writer/token-delegate-tx "0x3333333333333333333333333333333333333334"
+                                               100000000
+                                               true))))
+  (is (nil? (core-writer/staking-deposit-tx 0)))
+  (is (nil? (core-writer/token-delegate-tx "0x12" 1 false))))

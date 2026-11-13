@@ -42,13 +42,19 @@ The wallet is never asked for a signature. The wallet menu shows the key address
 
 **Funds**
 
-The app moves USDC only between the account's own balances. Each move is a transaction through the wallet:
+The app moves funds only between the account's own balances. Each move is a transaction through the wallet:
 
-- HyperEVM to Spot: an approval for exactly the amount, then a deposit through Circle's CoreDepositWallet.
+- HyperEVM to Spot: for USDC an approval for exactly the amount, then a deposit through Circle's CoreDepositWallet; for HYPE the amount as value to HYPE's system address; for another linked token a transfer to its system address. Each credits the sender.
 - Spot to Perps and back: CoreWriter action 7.
-- Spot to HyperEVM: CoreWriter action 13 to USDC's system address. Every field but the amount is fixed.
+- Spot to HyperEVM, any linked token: CoreWriter action 13 to the token's system address, from Spot to Spot. HyperCore pays it out to the sender's own HyperEVM address.
+- Between the account's own balances, or to and from its own sub-accounts: CoreWriter action 13 with the account or one of its own sub-accounts as the destination. Named perp dexes are not mapped yet.
+- Staking: Spot to staking (action 4), staking to Spot (action 5), delegate and undelegate (action 3).
 
-Every other move is refused: other tokens, sends to another address, withdrawals to another chain, staking.
+`user_actions.cljs` decides what a `sendAsset` may name before anything reaches the wallet: the token must match the spot metadata exactly (name and token id), and the destination must be the token's system address, the account itself, or a sub-account whose master is the account.
+
+Every other move is refused: sends to another address, withdrawals to another chain, vault transfers, borrow and lend.
+
+The trading key may also create sub-accounts and move funds between the account and its own sub-accounts. Hyperliquid only allows those between a master and the sub-accounts it owns.
 
 ## Wallets that queue transactions
 

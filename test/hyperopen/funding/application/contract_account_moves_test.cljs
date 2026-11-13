@@ -75,18 +75,28 @@
                    (done)))
           (.catch (async-support/unexpected-error done))))))
 
-(deftest contract-account-deposit-is-usdc-only-test
+(deftest contract-account-deposits-hype-as-value-to-its-system-address-test
   (async done
     (let [store (contract-store hype-to-spot)
           sent (atom [])
           {:keys [deps toasts]}
           (harness store (evm->core @store support/hype-index "1")
-                   {:send-contract-account-transactions! (sender sent (js/Promise.resolve []))})]
+                   {:send-contract-account-transactions! (sender sent (js/Promise.resolve [{:hash nil :queued? true}]))
+                    :submit-hyperevm-to-core! (fn [& _]
+                                                (throw (js/Error. "must not follow receipts")))})]
       (-> (js/Promise.resolve (effects/api-submit-funding-transfer! deps))
           (.then (fn [_]
-                   (is (= [] @sent) "nothing reached the wallet")
-                   (is (= [[:error effects/contract-account-usdc-only-message]] @toasts))
-                   (is (true? (get-in @store [:funding-ui :modal :open?])))
+                   (let [[[from [tx]]] @sent]
+                     (is (= 1 (count @sent)))
+                     (is (= support/owner from))
+                     (is (= {:from support/owner
+                             :to "0x2222222222222222222222222222222222222222"
+                             :chainId "0x3e7"
+                             :value "0xde0b6b3a7640000"}
+                            tx)
+                         "1 HYPE as value to HYPE's system address, which credits the sender"))
+                   (is (= [[:success effects/contract-account-sent-message]] @toasts))
+                   (is (false? (get-in @store [:funding-ui :modal :open?])))
                    (done)))
           (.catch (async-support/unexpected-error done))))))
 

@@ -1,7 +1,9 @@
 (ns hyperopen.api.trading.user-actions
   (:require [clojure.string :as str]
+            [hyperopen.account.context :as account-context]
             [hyperopen.api.trading.debug-exchange-simulator :as debug-exchange-simulator]
             [hyperopen.api.trading.http :as http]
+            [hyperopen.hyperevm.domain.chain :as chain]
             [hyperopen.hyperevm.domain.core-writer :as core-writer]
             [hyperopen.hyperevm.domain.tokens :as tokens]
             [hyperopen.trading-crypto-modules :as trading-crypto-modules]
@@ -122,7 +124,7 @@
   "Enter an amount with at most 8 decimal places.")
 
 (def contract-account-send-asset-message
-  "A contract account can only move USDC from Spot to its own HyperEVM balance here. Send funds to other accounts from the account itself.")
+  "A contract account can only move funds to its own HyperEVM address, between its own balances, or to its own sub-accounts here. Send funds to other accounts from the account itself.")
 
 (defn- sign-and-post-user-action!
   [store address action nonce-field sign-action-key]
@@ -187,52 +189,156 @@
   [value]
   (str/blank? (str (or value ""))))
 
-(defn- spot-usdc-to-own-evm?
-  "True when `action` is exactly the `sendAsset` that moves USDC from the
-   Spot balance to the sender's own HyperEVM balance: USDC as the spot
-   metadata in `store` knows it (token 0), to USDC's system address, from
-   Spot, not from a sub-account."
-  [store action]
-  (let [usdc (tokens/token-by-index (get-in @store [:spot :meta]) 0)]
-    (boolean
-     (and (map? usdc)
-          (seq (:wire-id usdc))
-          (= (:wire-id usdc) (:token action))
-          (= core-writer/usdc-system-address
-             (some-> (:destination action) str str/trim str/lower-case))
-          (= core-writer/usdc-system-address
-             (some-> (:system-address usdc) str str/lower-case))
-          (= "spot" (:sourceDex action))
-          (= "spot" (:destinationDex action))
-          (blank-text? (:fromSubAccount action))))))
+(defn- lower-address
+  [value]
+  (some-> value str str/trim str/lower-case not-empty))
+
+(defn- field
+  "Read `k` from a map whose keys may be keywords or strings."
+  [m k]
+  (let [value (get m k)]
+    (if (some? value) value (get m (name k)))))
+
+(defn- spot-token-by-wire-id
+  "The spot token that `wire-id` (`NAME:0xtokenId`) names exactly, from the
+   spot metadata in `store`: `{:index :name :wei-decimals}`, or nil. A name
+   alone is not enough, so a look-alike token cannot stand in."
+  [store wire-id]
+  (let [[token-name token-id] (str/split (str wire-id) #":" 2)]
+    (when (and (seq token-name) (seq token-id))
+      (some (fn [token]
+              (when (and (= token-name (str (field token :name)))
+                         (= (str/lower-case token-id)
+                            (some-> (field token :tokenId) str str/lower-case)))
+                {:index (field token :index)
+                 :name (field token :name)
+                 :wei-decimals (field token :weiDecimals)}))
+            (field (get-in @store [:spot :meta]) :tokens)))))
+
+(defn- token-system-address
+  "Where HyperCore pays `token` out to the sender's own HyperEVM address."
+  [store {:keys [index name]}]
+  (or (some-> (tokens/token-by-index (get-in @store [:spot :meta]) index)
+              :system-address
+              lower-address)
+      (if (= "HYPE" name)
+        (lower-address (:hype-system-address chain/mainnet))
+        (lower-address (tokens/system-address index)))))
+
+(defn- dex-id
+  "`sendAsset`'s dex name as CoreWriter's id: spot, or the default perp
+   dex. Named perp dexes are not mapped here, so they are refused."
+  [dex]
+  (case (some-> dex str str/trim)
+    "spot" (core-writer/spot-dex-id)
+    "" 0
+    nil 0
+    nil))
+
+(defn- own-send-asset
+  "For a contract account at `address`, `{:tx tx}` for a `sendAsset` that
+   stays with the account, `{:refusal message}` otherwise. It stays when it
+   goes to:
+
+   - the token's system address, from Spot to Spot: HyperCore pays it out
+     to the sender's own HyperEVM address;
+   - the account itself, between two different balances;
+   - one of the account's own sub-accounts.
+
+   The source is the account or one of its own sub-accounts."
+  [store address action]
+  (let [owner (lower-address address)
+        own-subs (set (keep lower-address
+                            (account-context/owned-subaccount-addresses @store)))
+        token (spot-token-by-wire-id store (:token action))
+        destination (lower-address (:destination action))
+        source-dex (dex-id (:sourceDex action))
+        destination-dex (dex-id (:destinationDex action))
+        from-sub (lower-address (:fromSubAccount action))
+        to-evm? (and token
+                     (= destination (token-system-address store token))
+                     (= "spot" (:sourceDex action))
+                     (= "spot" (:destinationDex action)))
+        ;; To itself: from a sub-account, or between two different balances
+        ;; (the same balance to itself would move nothing).
+        to-self? (and (= destination owner)
+                      (or (not (blank-text? from-sub))
+                          (not= source-dex destination-dex)))
+        to-own-sub? (contains? own-subs destination)
+        stays? (and token
+                    (some? source-dex)
+                    (some? destination-dex)
+                    (or (blank-text? from-sub) (contains? own-subs from-sub))
+                    (or to-evm? to-self? to-own-sub?))
+        wei (when stays?
+              (core-writer/decimal->units (:amount action) (:wei-decimals token)))]
+    (cond
+      (not stays?)
+      {:refusal contract-account-send-asset-message}
+
+      (nil? wei)
+      {:refusal (if (= 8 (:wei-decimals token))
+                  contract-account-withdraw-invalid-message
+                  (str "Enter an amount with at most " (:wei-decimals token)
+                       " decimal places."))}
+
+      :else
+      (if-let [tx (core-writer/send-asset-tx {:destination destination
+                                              :sub-account from-sub
+                                              :source-dex source-dex
+                                              :destination-dex destination-dex
+                                              :token (:index token)
+                                              :wei wei})]
+        {:tx tx}
+        {:refusal contract-account-send-asset-message}))))
 
 (defn submit-send-asset!
-  "Send an asset. A contract account cannot sign this, and the one send it
-   makes here is USDC from Spot to its own HyperEVM balance, as a CoreWriter
-   transaction whose every field but the amount is fixed
-   (`core-writer/spot-usdc-to-evm-tx`). Anything that would reach another
-   account is refused."
+  "Send an asset. A contract account cannot sign this. It sends a
+   CoreWriter transaction instead, and only for a send that stays with the
+   account (`own-send-asset`): back to its own HyperEVM address, between its
+   own balances, or to its own sub-accounts. Anything that would reach
+   another account is refused before the wallet is asked."
   [store address action]
-  (cond
-    (not (true? (contract-account/known-contract-account? address)))
+  (if-not (true? (contract-account/known-contract-account? address))
     (sign-and-post-user-action! store address action :nonce :sign-send-asset-action!)
+    (let [{:keys [tx refusal]} (own-send-asset store address action)]
+      (if tx
+        (submit-core-writer-transaction! address tx)
+        (js/Promise.reject (js/Error. refusal))))))
 
-    (not (spot-usdc-to-own-evm? store action))
-    (js/Promise.reject (js/Error. contract-account-send-asset-message))
+(def contract-account-staking-invalid-message
+  "Enter a positive HYPE amount.")
 
-    :else
-    (if-let [tx (core-writer/spot-usdc-to-evm-tx (:amount action))]
+(defn- submit-staking!
+  "A contract account's staking move as a CoreWriter transaction built by
+   `->tx`; an ordinary wallet signs it."
+  [store address action sign-action-key ->tx]
+  (if (true? (contract-account/known-contract-account? address))
+    (if-let [tx (->tx action)]
       (submit-core-writer-transaction! address tx)
-      (js/Promise.reject (js/Error. contract-account-withdraw-invalid-message)))))
+      (js/Promise.reject (js/Error. contract-account-staking-invalid-message)))
+    (sign-and-post-user-action! store address action :nonce sign-action-key)))
 
-(defn submit-c-deposit! [store address action]
-  (sign-and-post-user-action! store address action :nonce :sign-c-deposit-action!))
+(defn submit-c-deposit!
+  "Spot HYPE to the account's own staking balance (CoreWriter action 4 for a
+   contract account)."
+  [store address action]
+  (submit-staking! store address action :sign-c-deposit-action!
+                   #(core-writer/staking-deposit-tx (:wei %))))
 
-(defn submit-c-withdraw! [store address action]
-  (sign-and-post-user-action! store address action :nonce :sign-c-withdraw-action!))
+(defn submit-c-withdraw!
+  "Staking HYPE back to the account's own spot balance (CoreWriter action 5
+   for a contract account)."
+  [store address action]
+  (submit-staking! store address action :sign-c-withdraw-action!
+                   #(core-writer/staking-withdraw-tx (:wei %))))
 
-(defn submit-token-delegate! [store address action]
-  (sign-and-post-user-action! store address action :nonce :sign-token-delegate-action!))
+(defn submit-token-delegate!
+  "Delegate or undelegate the account's own staking balance (CoreWriter
+   action 3 for a contract account). The HYPE stays the account's."
+  [store address action]
+  (submit-staking! store address action :sign-token-delegate-action!
+                   #(core-writer/token-delegate-tx (:validator %) (:wei %) (true? (:isUndelegate %)))))
 
 (defn submit-withdraw3! [store address action]
   (sign-and-post-user-action! store address action :time :sign-withdraw3-action!))
