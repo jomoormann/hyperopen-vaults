@@ -64,6 +64,27 @@
             [:effects/api-fetch-hyperunit-fee-estimate]]
            (funding-actions/open-funding-withdraw-modal state)))))
 
+(deftest contract-account-deposit-withdraw-and-send-open-transfer-test
+  ;; A Safe can't bridge from or to other chains or send to another address:
+  ;; its Deposit, Withdraw and Send open Transfer between its own balances.
+  (let [state (assoc-in (base-state) [:wallet :contract-account-address]
+                        "0x1234567890abcdef1234567890abcdef12345678")
+        modal-of (fn [effects]
+                   (some (fn [[effect-id path modal]]
+                           (when (and (= :effects/save effect-id) (= [:funding-ui :modal] path))
+                             modal))
+                         effects))]
+    (is (account-context/contract-account? state))
+    (let [deposit (modal-of (funding-actions/open-funding-deposit-modal state))
+          withdraw (modal-of (funding-actions/open-funding-withdraw-modal state))
+          send (modal-of (funding-actions/open-funding-send-modal state {:token "USDC"}))]
+      (is (= [:transfer :hyperevm :spot]
+             [(:mode deposit) (:transfer-from deposit) (:transfer-to deposit)]))
+      (is (= [:transfer :spot :hyperevm]
+             [(:mode withdraw) (:transfer-from withdraw) (:transfer-to withdraw)]))
+      (is (= :transfer (:mode send)))
+      (is (nil? (:transfer-from send)) "Send opens the plain Perps/Spot transfer"))))
+
 (deftest open-funding-modal-actions-normalize-anchor-bounds-test
   (let [state (base-state)
         anchor {:left "940"

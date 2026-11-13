@@ -279,21 +279,22 @@
    changing and cancelling orders, and the margin settings of a position.
 
    Hyperliquid does not limit a trading key, so this is not a security
-   boundary. It keeps the app itself from using the key for anything that
-   moves funds to another account (vault transfers, borrow and lend) or
-   changes the account (referrals, rewards). A contract account does those
-   with a transaction that its own signers and roles decide on.
-
-   Creating a sub-account and moving funds between the account and its own
-   sub-accounts are allowed: Hyperliquid only lets a master move funds to
-   and from sub-accounts it owns, so the funds stay with the account."
+   boundary. It is the list of what this app sends with the key: trading,
+   margin, sub-accounts (Hyperliquid only moves funds between a master and
+   the sub-accounts it owns), vaults, borrow and lend, referrals and
+   rewards, and merging outcome shares. Anything else, including action
+   types a later version of the app may add, is refused until it is added
+   here on purpose."
   #{"order" "cancel" "cancelByCloid" "modify" "batchModify"
     "twapOrder" "twapCancel" "scheduleCancel"
     "updateLeverage" "updateIsolatedMargin"
-    "createSubAccount" "subAccountTransfer" "subAccountSpotTransfer"})
+    "createSubAccount" "subAccountModify" "subAccountTransfer" "subAccountSpotTransfer"
+    "vaultTransfer" "borrowLend"
+    "setReferrer" "registerReferrer" "claimRewards"
+    "userOutcome"})
 
 (def contract-account-agent-action-message
-  "A contract account's trading key only places and manages orders. Do this from the account itself.")
+  "This app doesn't sign this action with a contract account's trading key. Do this from the account itself.")
 
 (defn- action-type
   [action]

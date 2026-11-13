@@ -226,14 +226,20 @@
         (lower-address (tokens/system-address index)))))
 
 (defn- dex-id
-  "`sendAsset`'s dex name as CoreWriter's id: spot, or the default perp
-   dex. Named perp dexes are not mapped here, so they are refused."
-  [dex]
-  (case (some-> dex str str/trim)
-    "spot" (core-writer/spot-dex-id)
-    "" 0
-    nil 0
-    nil))
+  "`sendAsset`'s dex name as CoreWriter's id: spot, the default perp dex
+   (0), or a named perp dex. A named dex's id is its index in Hyperliquid's
+   `perpDexs` list, whose entry 0 is the default dex; the app keeps the
+   named entries in order (`[:perp-dexs]`), so the id is one past the
+   name's position there. An unknown name gives nil and is refused."
+  [store dex]
+  (let [dex* (some-> dex str str/trim)]
+    (cond
+      (= "spot" dex*) (core-writer/spot-dex-id)
+      (str/blank? dex*) 0
+      :else (let [names (vec (get @store :perp-dexs))
+                  position (.indexOf (clj->js names) dex*)]
+              (when (>= position 0)
+                (inc position))))))
 
 (defn- own-send-asset
   "For a contract account at `address`, `{:tx tx}` for a `sendAsset` that
@@ -252,8 +258,8 @@
                             (account-context/owned-subaccount-addresses @store)))
         token (spot-token-by-wire-id store (:token action))
         destination (lower-address (:destination action))
-        source-dex (dex-id (:sourceDex action))
-        destination-dex (dex-id (:destinationDex action))
+        source-dex (dex-id store (:sourceDex action))
+        destination-dex (dex-id store (:destinationDex action))
         from-sub (lower-address (:fromSubAccount action))
         to-evm? (and token
                      (= destination (token-system-address store token))

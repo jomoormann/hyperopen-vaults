@@ -203,6 +203,17 @@
    :refresh-hyperevm-bridge-capacity hyperevm-actions/refresh-hyperevm-bridge-capacity
    :now-ms (fn [] (platform/now-ms))})
 
+(defn- open-contract-account-transfer
+  "For a contract account (a Safe, for example), Deposit, Withdraw and Send
+   open Transfer instead. Their own dialogs bridge from or to other chains
+   (Arbitrum, Hyperunit) or send to another address, which a contract
+   account on HyperEVM cannot sign or must not do. Transfer moves funds
+   between the account's own balances: Deposit opens it from HyperEVM to
+   Spot, Withdraw from Spot back to the account's own HyperEVM address."
+  [state anchor opener-data-role transfer-context]
+  (transfer-commands/open-funding-transfer-modal (command-deps) state anchor opener-data-role
+                                                 transfer-context))
+
 (defn open-funding-send-modal
   ([state]
    (open-funding-send-modal state nil nil nil))
@@ -211,7 +222,11 @@
   ([state send-context anchor]
    (open-funding-send-modal state send-context anchor nil))
   ([state send-context anchor opener-data-role]
-   (modal-commands/open-funding-send-modal (command-deps) state send-context anchor opener-data-role)))
+   ;; A contract account only moves funds between its own balances here
+   ;; (see `contract-account-transfer-context`), so Send opens Transfer.
+   (if (account-context/contract-account? state)
+     (open-contract-account-transfer state anchor opener-data-role nil)
+     (modal-commands/open-funding-send-modal (command-deps) state send-context anchor opener-data-role))))
 
 (defn open-funding-deposit-modal
   ([state]
@@ -219,7 +234,9 @@
   ([state anchor]
    (open-funding-deposit-modal state anchor nil))
   ([state anchor opener-data-role]
-   (modal-commands/open-funding-deposit-modal (command-deps) state anchor opener-data-role)))
+   (if (account-context/contract-account? state)
+     (open-contract-account-transfer state anchor opener-data-role {:from :hyperevm :to :spot})
+     (modal-commands/open-funding-deposit-modal (command-deps) state anchor opener-data-role))))
 
 (defn open-funding-transfer-modal
   ([state]
@@ -237,7 +254,9 @@
   ([state anchor]
    (open-funding-withdraw-modal state anchor nil))
   ([state anchor opener-data-role]
-   (modal-commands/open-funding-withdraw-modal (command-deps) state anchor opener-data-role)))
+   (if (account-context/contract-account? state)
+     (open-contract-account-transfer state anchor opener-data-role {:from :spot :to :hyperevm})
+     (modal-commands/open-funding-withdraw-modal (command-deps) state anchor opener-data-role))))
 
 (defn- open-legacy-funding-modal
   [state legacy-kind]

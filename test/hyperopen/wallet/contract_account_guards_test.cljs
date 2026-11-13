@@ -180,7 +180,7 @@
                         "no nonce was taken, nothing was signed")
                     (done)))))))
 
-(deftest contract-account-key-signs-trading-actions-only-test
+(deftest contract-account-key-signs-what-the-app-sends-only-test
   (let [allowed? (fn [action-type]
                    (agent-actions/contract-account-action-allowed?
                     vault-address
@@ -191,22 +191,29 @@
                          "updateLeverage" "updateIsolatedMargin"
                          ;; Hyperliquid only moves funds between a master and
                          ;; its own sub-accounts here.
-                         "createSubAccount" "subAccountTransfer" "subAccountSpotTransfer"]]
-      (is (true? (allowed? action-type)) action-type))
-    (doseq [action-type ["vaultTransfer" "subAccountModify" "borrowLend"
+                         "createSubAccount" "subAccountModify"
+                         "subAccountTransfer" "subAccountSpotTransfer"
+                         "vaultTransfer" "borrowLend"
                          "setReferrer" "registerReferrer" "claimRewards"
-                         "userOutcome" "somethingNew" nil]]
+                         "userOutcome"]]
+      (is (true? (allowed? action-type)) action-type))
+    ;; Action types the app never sends stay refused, so a later feature has
+    ;; to be added to the list on purpose.
+    (doseq [action-type ["agentSetAbstraction" "agentEnableDexAbstraction" "evmUserModify"
+                         "agentSendAsset" "cDeposit2" "reserveRequestWeight"
+                         "hip3LiquidatorTransfer" "createVault" "spotDeploy" "perpDeploy"
+                         "gossipPriorityBid" "noop" "somethingNew" nil]]
       (is (false? (allowed? action-type)) (str action-type)))
     (is (true? (agent-actions/contract-account-action-allowed?
                 vault-address
                 #js {:type "order"}))
         "a JS action object is read too")
     (contract-account/remember! vault-address false)
-    (is (true? (allowed? "vaultTransfer")) "an ordinary wallet's key is not limited")
+    (is (true? (allowed? "createVault")) "an ordinary wallet's key is not limited")
     (contract-account/reset-detections!)
-    (is (true? (allowed? "vaultTransfer")) "nor is an account that was not checked")))
+    (is (true? (allowed? "createVault")) "nor is an account that was not checked")))
 
-(deftest contract-account-key-refuses-a-fund-move-before-it-signs-test
+(deftest contract-account-key-refuses-other-actions-before-it-signs-test
   (async done
     (contract-account/remember! vault-address true)
     (let [store (vault-store)
@@ -215,17 +222,14 @@
                         (.then (fn [_] ::resolved))
                         (.catch (fn [err] (.-message err)))))]
       (-> (js/Promise.all
-           #js [(refused (agent-actions/submit-vault-transfer!
+           #js [(refused (agent-actions/resolve-signing-context!
                           store
                           vault-address
-                          {:type "vaultTransfer"
-                           :vaultAddress "0x1111111111111111111111111111111111111111"
-                           :isDeposit true
-                           :usd 1000000}))
+                          {:type "hip3LiquidatorTransfer"}))
                 (refused (agent-actions/resolve-signing-context!
                           store
                           vault-address
-                          {:type "borrowLend"}))])
+                          {:type "reserveRequestWeight"}))])
           (.then (fn [messages]
                    (is (= [agent-actions/contract-account-agent-action-message
                            agent-actions/contract-account-agent-action-message]
@@ -437,4 +441,37 @@
           (.catch (fn [err]
                     (is (= user-actions/contract-account-staking-invalid-message (.-message err)))
                     (is (= [] @requests))
+                    (done)))))))
+
+(deftest contract-account-moves-to-a-named-perp-dex-of-its-own-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (let [store (funded-vault-store)
+          requests (atom [])]
+      ;; Hyperliquid's perpDexs list is [null, xyz, flx, ...]: flx is dex 2.
+      (swap! store assoc :perp-dexs ["xyz" "flx"])
+      (-> (sent-calldata store user-actions/submit-send-asset!
+                         {:type "sendAsset" :destination vault-address
+                          :sourceDex "" :destinationDex "flx" :token usdc-wire-id
+                          :amount "1" :fromSubAccount ""})
+          (.then (fn [data]
+                   (is (= (send-asset-data {:destination vault-address :source-dex 0
+                                            :destination-dex 2 :token 0 :wei 100000000})
+                          data))
+                   (provider-registry/set-provider-override!
+                    (fake-wallet requests (js/Promise.resolve "0xhash")))
+                   (-> (user-actions/submit-send-asset!
+                        store vault-address
+                        {:type "sendAsset" :destination vault-address
+                         :sourceDex "" :destinationDex "unknown" :token usdc-wire-id
+                         :amount "1" :fromSubAccount ""})
+                       (.then (fn [_] ::resolved))
+                       (.catch (fn [err] (.-message err))))))
+          (.then (fn [message]
+                   (is (= user-actions/contract-account-send-asset-message message)
+                       "a dex the app doesn't know is refused")
+                   (is (= [] @requests))
+                   (done)))
+          (.catch (fn [err]
+                    (is false (str "unexpected: " (.-message err)))
                     (done)))))))
