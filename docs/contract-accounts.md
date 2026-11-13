@@ -36,7 +36,7 @@ The wallet is never asked for a signature. The wallet menu shows the key address
 - It stays on the device behind the passkey. The passkey cannot be turned off for a contract account.
 - It is kept when the wallet disconnects or switches account.
 - It locks after 30 minutes without input.
-- The app uses it for orders, cancels and margin settings only. Hyperliquid itself does not limit a trading key, so this is a guard in the app, not a security boundary.
+- The app signs with it only the actions the app itself sends: orders, cancels, margin settings, sub-accounts, vault deposits and withdrawals, borrow and lend, referrals and rewards, and merging outcome shares. Any other action type is refused until it is added on purpose (`agent_actions.cljs`). Hyperliquid itself does not limit a trading key, so this is a guard in the app, not a security boundary.
 - The wallet menu can replace it at any time, and asks for a renewal from 14 days before the expiry. Trading pauses until the new key is registered. If the replacement is refused or cancelled, the old key comes back.
 - A waiting registration can be cancelled, which removes the stored key.
 
@@ -52,9 +52,8 @@ The app moves funds only between the account's own balances. Each move is a tran
 
 `user_actions.cljs` decides what a `sendAsset` may name before anything reaches the wallet: the token must match the spot metadata exactly (name and token id), and the destination must be the token's system address, the account itself, or a sub-account whose master is the account.
 
-Every other move is refused: sends to another address, withdrawals to another chain, vault transfers, borrow and lend.
+Every other move is refused: sends to another address and withdrawals to another chain. For a contract account, Deposit, Withdraw and Send open Transfer instead of their own dialogs, and authorizing or removing other API wallets is refused.
 
-The trading key may also create sub-accounts and move funds between the account and its own sub-accounts. Hyperliquid only allows those between a master and the sub-accounts it owns.
 
 ## Wallets that queue transactions
 
