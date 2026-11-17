@@ -20,9 +20,12 @@
    A `hyperEvmToCore` move must match the catalog for its token (kind,
    recipient, contract, spender), send exactly the amount's units, target
    chain 999, deposit into Spot (`destinationDex` 4294967295: Perps settles
-   through CoreWriter and cannot revert), and carry no more decimals than the
+   through CoreWriter and cannot revert) unless the request is a contract
+   account's direct USDC move to Perps (`:evm :to :perps`, `destinationDex`
+   0), and carry no more decimals than the
    Core precision (the rest would be lost on HyperCore)."
   (:require [clojure.string :as str]
+            [hyperopen.account.context :as account-context]
             [hyperopen.hyperevm.domain.chain :as chain]
             [hyperopen.hyperevm.domain.tokens :as tokens]
             [hyperopen.hyperevm.domain.units :as units]))
@@ -85,8 +88,8 @@
           :else nil)))))
 
 (defn- check-hyperevm-to-core
-  [spot-meta {:keys [kind tokenIndex recipient tokenAddress spender amount units chainId
-                     destinationDex]}]
+  [spot-meta to {:keys [kind tokenIndex recipient tokenAddress spender amount units chainId
+                        destinationDex]}]
   (let [token (tokens/token-by-index spot-meta tokenIndex)
         expected-units (when token
                          (units/units-text (units/parse-units amount (:evm-decimals token))))]
@@ -112,8 +115,14 @@
       (not= (:chain-id chain/mainnet) (lower chainId))
       "Refusing to sign: HyperEVM transfers must target chain 999."
 
-      (not= (get-in chain/mainnet [:core-deposit-destination-dex :spot]) destinationDex)
-      "Refusing to sign: a move from HyperEVM must land in Spot."
+      (and (= :perps to) (not= "usdcCoreDeposit" kind))
+      "Refusing to sign: only USDC moves from HyperEVM straight to Perps."
+
+      (not= (get-in chain/mainnet [:core-deposit-destination-dex (if (= :perps to) :perps :spot)])
+            destinationDex)
+      (if (= :perps to)
+        "Refusing to sign: a move from HyperEVM to Perps must land in Perps."
+        "Refusing to sign: a move from HyperEVM must land in Spot.")
 
       (not (within-core-precision? amount token))
       (str "Refusing to sign: " (:name token) " moves with at most "
@@ -129,5 +138,8 @@
         spot-meta (get-in state [:spot :meta])]
     (case (:type action)
       "sendAsset" (check-send-asset spot-meta (:route request) action)
-      "hyperEvmToCore" (check-hyperevm-to-core spot-meta action)
+      "hyperEvmToCore" (check-hyperevm-to-core spot-meta
+                                               (when (account-context/contract-account? state)
+                                                 (get-in request [:evm :to]))
+                                               action)
       nil)))

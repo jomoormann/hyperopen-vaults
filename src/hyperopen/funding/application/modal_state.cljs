@@ -38,6 +38,9 @@
    :transfer-from nil
    :transfer-to nil
    :transfer-asset nil
+   ;; A contract account moves USDC between Perps and HyperEVM in one step
+   ;; (`transfer-route/supported-pair?`); set when Transfer opens.
+   :transfer-direct? false
    ;; HyperEVM run progress and the one-click gas top-up, written by effects.
    :transfer-evm nil
    :transfer-gas-topup nil

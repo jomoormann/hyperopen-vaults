@@ -233,6 +233,7 @@
    `index` from the owner in `state`."
   [state index amount]
   (evm-preview/evm->core-request state
+                                 {:from :hyperevm :to :spot}
                                  (tokens/token-by-index (get-in state [:spot :meta]) index)
                                  amount))
 

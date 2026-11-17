@@ -47,6 +47,7 @@
           :transfer-from nil
           :transfer-to nil
           :transfer-asset nil
+          :transfer-direct? false
           :transfer-evm nil
           :transfer-gas-topup nil
           :destination-input ""

@@ -475,3 +475,37 @@
           (.catch (fn [err]
                     (is false (str "unexpected: " (.-message err)))
                     (done)))))))
+
+(deftest contract-account-stakes-from-spot-in-one-batch-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (let [requests (atom [])
+          validator "0x3333333333333333333333333333333333333334"
+          wallet #js {:request (fn [args]
+                                 (let [method (unchecked-get args "method")
+                                       params (js->clj (unchecked-get args "params")
+                                                       :keywordize-keys true)]
+                                   (swap! requests conj [method params])
+                                   (case method
+                                     "eth_chainId" (js/Promise.resolve "0x3e7")
+                                     "wallet_getCapabilities"
+                                     (js/Promise.resolve
+                                      #js {"0x3e7" #js {:atomicBatch #js {:supported true}}})
+                                     "wallet_sendCalls" (js/Promise.resolve #js {:id "batch-1"})
+                                     (js/Promise.reject (js/Error. (str "unexpected " method))))))}]
+      (provider-registry/set-provider-override! wallet)
+      (-> (user-actions/submit-token-delegate!
+           (vault-store) vault-address
+           {:type "tokenDelegate" :validator validator :wei 100000000
+            :isUndelegate false :stakeFromSpotWei 75000000})
+          (.then (fn [response]
+                   (is (= "ok" (:status response)))
+                   (let [[[_ [batch]]] (filter #(= "wallet_sendCalls" (first %)) @requests)]
+                     (is (= [(:data (core-writer/staking-deposit-tx 75000000))
+                             (:data (core-writer/token-delegate-tx validator 100000000 false))]
+                            (mapv :data (:calls batch)))
+                         "Spot -> staking, then the delegation, as one transaction"))
+                   (done)))
+          (.catch (fn [err]
+                    (is false (str "unexpected: " (.-message err)))
+                    (done)))))))

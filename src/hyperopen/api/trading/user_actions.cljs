@@ -162,16 +162,20 @@
                    (-> (http/post-signed-action! @action* nonce signature)
                        (.then http/parse-json!))))))))
 
-(defn- submit-core-writer-transaction!
-  "Send `tx` to CoreWriter through the connected wallet. Resolves like a
-   posted action once the wallet has taken the transaction. Hyperliquid
-   applies it when the transaction is executed, which for a contract
-   account can be after other signers approved it."
-  [address tx]
-  (-> (contract-account/send-transactions! address [tx])
+(defn- submit-core-writer-transactions!
+  "Send `txs` to CoreWriter through the connected wallet, as one batch when
+   it can. Resolves like a posted action once the wallet has taken them.
+   Hyperliquid applies them when they are executed, which for a contract
+   account can be after other signers approved them."
+  [address txs]
+  (-> (contract-account/send-transactions! address txs)
       (.then (fn [_]
                {:status "ok"
                 :response {:type "default"}}))))
+
+(defn- submit-core-writer-transaction!
+  [address tx]
+  (submit-core-writer-transactions! address [tx]))
 
 (defn submit-usd-class-transfer!
   "Move USDC between the perp and spot balances of `address`. A contract
@@ -316,35 +320,49 @@
   "Enter a positive HYPE amount.")
 
 (defn- submit-staking!
-  "A contract account's staking move as a CoreWriter transaction built by
-   `->tx`; an ordinary wallet signs it."
-  [store address action sign-action-key ->tx]
+  "A contract account's staking move as the CoreWriter transactions built by
+   `->txs`, sent as one batch; an ordinary wallet signs the action."
+  [store address action sign-action-key ->txs]
   (if (true? (contract-account/known-contract-account? address))
-    (if-let [tx (->tx action)]
-      (submit-core-writer-transaction! address tx)
-      (js/Promise.reject (js/Error. contract-account-staking-invalid-message)))
-    (sign-and-post-user-action! store address action :nonce sign-action-key)))
+    (let [txs (->txs action)]
+      (if (and (seq txs) (every? some? txs))
+        (submit-core-writer-transactions! address txs)
+        (js/Promise.reject (js/Error. contract-account-staking-invalid-message))))
+    (sign-and-post-user-action! store address (dissoc action :stakeFromSpotWei)
+                                :nonce sign-action-key)))
 
 (defn submit-c-deposit!
   "Spot HYPE to the account's own staking balance (CoreWriter action 4 for a
    contract account)."
   [store address action]
   (submit-staking! store address action :sign-c-deposit-action!
-                   #(core-writer/staking-deposit-tx (:wei %))))
+                   #(vector (core-writer/staking-deposit-tx (:wei %)))))
 
 (defn submit-c-withdraw!
   "Staking HYPE back to the account's own spot balance (CoreWriter action 5
    for a contract account)."
   [store address action]
   (submit-staking! store address action :sign-c-withdraw-action!
-                   #(core-writer/staking-withdraw-tx (:wei %))))
+                   #(vector (core-writer/staking-withdraw-tx (:wei %)))))
 
 (defn submit-token-delegate!
   "Delegate or undelegate the account's own staking balance (CoreWriter
-   action 3 for a contract account). The HYPE stays the account's."
+   action 3 for a contract account). The HYPE stays the account's.
+
+   A contract account's delegation may carry `:stakeFromSpotWei`, HYPE to
+   move from its Spot balance to its staking balance first (action 4): both
+   go as one batch, so it stakes from Spot in one step. An ordinary wallet's
+   action never carries it."
   [store address action]
   (submit-staking! store address action :sign-token-delegate-action!
-                   #(core-writer/token-delegate-tx (:validator %) (:wei %) (true? (:isUndelegate %)))))
+                   (fn [{:keys [validator wei isUndelegate stakeFromSpotWei]}]
+                     (cond-> []
+                       (some? stakeFromSpotWei)
+                       (conj (when-not (true? isUndelegate)
+                               (core-writer/staking-deposit-tx stakeFromSpotWei)))
+
+                       :always
+                       (conj (core-writer/token-delegate-tx validator wei (true? isUndelegate)))))))
 
 (defn submit-withdraw3! [store address action]
   (sign-and-post-user-action! store address action :time :sign-withdraw3-action!))

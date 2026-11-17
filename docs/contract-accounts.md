@@ -46,9 +46,13 @@ The app moves funds only between the account's own balances. Each move is a tran
 
 - HyperEVM to Spot: for USDC an approval for exactly the amount, then a deposit through Circle's CoreDepositWallet; for HYPE the amount as value to HYPE's system address; for another linked token a transfer to its system address. Each credits the sender.
 - Spot to Perps and back: CoreWriter action 7.
+- Perps to HyperEVM in one step, USDC only: action 7 (Perps to Spot) and action 13 to USDC's system address, sent as one batch.
+- HyperEVM to Perps in one step, USDC only: the approval and a CoreDepositWallet deposit into Perps (destination dex 0), sent as one batch. Ordinary wallets keep going through Spot both ways.
 - Spot to HyperEVM, any linked token: CoreWriter action 13 to the token's system address, from Spot to Spot. HyperCore pays it out to the sender's own HyperEVM address.
 - Between the account's own balances, or to and from its own sub-accounts: CoreWriter action 13 with the account or one of its own sub-accounts as the destination. Named perp dexes are not mapped yet.
-- Staking: Spot to staking (action 4), staking to Spot (action 5), delegate and undelegate (action 3).
+- Staking: Spot to staking (action 4), staking to Spot (action 5), delegate and undelegate (action 3). Delegating more than the staking balance moves the rest from Spot first, in the same batch (action 4, then action 3).
+
+When the wallet runs batches atomically (EIP-5792 `wallet_getCapabilities`, which Zodiac Pilot answers), two or more transactions go as one `wallet_sendCalls`, so the account signs and executes them as one transaction. Other wallets get them one after the other.
 
 `user_actions.cljs` decides what a `sendAsset` may name before anything reaches the wallet: the token must match the spot metadata exactly (name and token id), and the destination must be the token's system address, the account itself, or a sub-account whose master is the account.
 

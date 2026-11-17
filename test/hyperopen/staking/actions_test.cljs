@@ -493,3 +493,39 @@
            :staking {:delegator-summary {:undelegated 5}}
            :staking-ui {:delegate-amount "1"
                         :selected-validator ""}}))))
+
+(deftest contract-account-stakes-straight-from-spot-test
+  (let [state (fn [contract?]
+                (cond-> {:wallet {:address wallet-address}
+                         :staking {:account-address wallet-address
+                                   :loaded-for {:delegator-summary wallet-address
+                                                :spot-state wallet-address}
+                                   :delegator-summary {:undelegated 0.25}
+                                   :spot-state {:balances [{:coin "HYPE" :available 2}]}}
+                         :staking-ui {:delegate-amount "1"
+                                      :selected-validator validator-address}}
+                  contract? (assoc-in [:wallet :contract-account-address] wallet-address)))
+        submitted (fn [effects]
+                    (some #(when (= :effects/api-submit-staking-delegate (first %)) (second %))
+                          effects))]
+    (is (= {:kind :delegate
+            :action {:type "tokenDelegate"
+                     :validator validator-address
+                     :wei 100000000
+                     :isUndelegate false
+                     :stakeFromSpotWei 75000000}}
+           (submitted (actions/submit-staking-delegate (state true))))
+        "the missing 0.75 HYPE moves from Spot to staking in the same batch")
+    (is (= [[:effects/save [:staking-ui :form-error] "Amount exceeds available staking balance."]
+            [:effects/save [:staking-ui :submitting :delegate?] false]]
+           (actions/submit-staking-delegate (state false)))
+        "an ordinary wallet still transfers to staking first")
+    (is (= [[:effects/save [:staking-ui :form-error]
+             "Amount exceeds your staking balance and the HYPE in your spot balance."]
+            [:effects/save [:staking-ui :submitting :delegate?] false]]
+           (actions/submit-staking-delegate
+            (assoc-in (state true) [:staking-ui :delegate-amount] "3"))))
+    (is (nil? (:stakeFromSpotWei
+               (:action (submitted (actions/submit-staking-delegate
+                                    (assoc-in (state true) [:staking-ui :delegate-amount] "0.25"))))))
+        "nothing moves from Spot when the staking balance covers the amount")))
