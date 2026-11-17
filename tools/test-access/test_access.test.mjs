@@ -12,7 +12,6 @@ import {
   unauthorizedResponse,
 } from "../../deploy/test-pages/lib/access_gate.mjs";
 import {
-  validatePassword,
   keysWithLabel,
   labelsOf,
   validateLabel,
@@ -169,13 +168,6 @@ test("labels are short and plain", () => {
   for (const label of [undefined, "", "a b", "x".repeat(65), "ä"]) {
     assert.throws(() => validateLabel(label), /label/);
   }
-});
-
-test("a password is not empty and is typed the same twice", () => {
-  assert.equal(validatePassword("pw", "pw"), "pw");
-  assert.throws(() => validatePassword("", ""), /empty/);
-  assert.throws(() => validatePassword("correct horse", "correct house"), /differ/);
-  assert.throws(() => validatePassword(undefined, undefined), /empty/);
 });
 
 test("revokes by label and lists labels only", () => {

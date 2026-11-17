@@ -1,6 +1,6 @@
 // Adds, lists and revokes passwords of the test deployment.
 //
-//   npm run test-access:add -- <label>      asks for the password (hidden, twice)
+//   npm run test-access:add -- <label> <password>
 //   npm run test-access:list                labels of all passwords
 //   npm run test-access:revoke -- <label>   deletes every password with that label
 //
@@ -8,8 +8,7 @@
 // CLOUDFLARE_API_TOKEN (with Workers KV edit rights) and CLOUDFLARE_ACCOUNT_ID.
 // The namespace is the one the deployment binds as TEST_ACCESS
 // (DEFAULT_KV_NAMESPACE_ID in stage.mjs), or TEST_ACCESS_KV_ID.
-// Only the password's hash goes to Cloudflare; the password itself is never
-// stored or passed on the command line.
+// Only the password's hash goes to Cloudflare.
 
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -28,67 +27,6 @@ export function validateLabel(label) {
     throw new Error("A label is 1-64 letters, digits, dots, dashes or underscores, such as anna.");
   }
   return label;
-}
-
-export function validatePassword(password, confirmation) {
-  if (typeof password !== "string" || password.length === 0) {
-    throw new Error("The password is empty.");
-  }
-  if (password !== confirmation) {
-    throw new Error("The two passwords differ.");
-  }
-  return password;
-}
-
-// Reads one line from the terminal without echoing it, or from stdin when it
-// is piped (`printf '%s\n' "$PW" "$PW" | npm run test-access:add -- anna`).
-function readHidden(prompt, lines) {
-  if (!process.stdin.isTTY) {
-    return lines.next().then(({ value }) => value ?? "");
-  }
-  return new Promise((resolve, reject) => {
-    const stdin = process.stdin;
-    let value = "";
-    process.stderr.write(prompt);
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.setEncoding("utf8");
-    const onData = (chunk) => {
-      for (const char of chunk) {
-        if (char === "\r" || char === "\n") {
-          done();
-          return resolve(value);
-        }
-        if (char === "\u0003") {
-          done();
-          return reject(new Error("Cancelled."));
-        }
-        if (char === "\u007f" || char === "\b") {
-          value = value.slice(0, -1);
-        } else {
-          value += char;
-        }
-      }
-    };
-    const done = () => {
-      stdin.off("data", onData);
-      stdin.setRawMode(false);
-      stdin.pause();
-      process.stderr.write("\n");
-    };
-    stdin.on("data", onData);
-  });
-}
-
-async function askPassword() {
-  let lines = null;
-  if (!process.stdin.isTTY) {
-    const { createInterface } = await import("node:readline");
-    lines = createInterface({ input: process.stdin })[Symbol.asyncIterator]();
-  }
-  const password = await readHidden("Password: ", lines);
-  const confirmation = await readHidden("Again: ", lines);
-  return validatePassword(password, confirmation);
 }
 
 // The keys whose label is `label`, from `wrangler kv key list` output.
@@ -124,22 +62,16 @@ function listKeys(id) {
   return JSON.parse(wrangler(["kv", "key", "list", "--namespace-id", id, "--remote"]));
 }
 
-async function add(label) {
-  const id = namespaceId();
-  const password = await askPassword();
-  const key = await passwordKey(password);
-
-  if (listKeys(id).some((entry) => entry.name === key)) {
-    throw new Error("This password is already in use. Choose another one.");
+async function add(label, password) {
+  if (!password) {
+    throw new Error("Usage: npm run test-access:add -- <label> <password>");
   }
-
   wrangler([
-    "kv", "key", "put", key, label,
-    "--namespace-id", id,
+    "kv", "key", "put", await passwordKey(password), label,
+    "--namespace-id", namespaceId(),
     "--metadata", JSON.stringify({ label }),
     "--remote",
   ]);
-
   console.log(`Added a password for ${label}.`);
 }
 
@@ -162,10 +94,10 @@ function revoke(label) {
   console.log(`Revoked ${keys.length} password(s) of ${label}.`);
 }
 
-async function main([command, label]) {
+async function main([command, label, password]) {
   switch (command) {
     case "add":
-      return add(validateLabel(label));
+      return add(validateLabel(label), password);
     case "list":
       return list();
     case "revoke":
