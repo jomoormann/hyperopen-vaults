@@ -3,10 +3,14 @@
    HyperEVM balance and its Spot balance. Its transactions are handed to the
    wallet and may be executed much later, so no run follows a receipt."
   (:require [cljs.test :refer-macros [async deftest is testing]]
+            [hyperopen.funding.actions :as funding-actions]
             [hyperopen.funding.application.submit-effects :as effects]
             [hyperopen.funding.domain.evm-transfer-preview :as evm-preview]
+            [hyperopen.funding.domain.transfer-invariants :as transfer-invariants]
+            [hyperopen.funding.domain.transfer-route :as transfer-route]
             [hyperopen.funding.test-support.hyperevm-effects
-             :refer [core->evm evm->core store-for harness run-of]]
+             :refer [core->evm evm->core store-for harness run-of token]]
+            [hyperopen.hyperevm.domain.core-writer :as core-writer]
             [hyperopen.funding.test-support.hyperevm-transfer :as support]
             [hyperopen.hyperevm.domain.abi :as abi]
             [hyperopen.hyperevm.domain.transfer-state :as transfer-state]
@@ -75,18 +79,28 @@
                    (done)))
           (.catch (async-support/unexpected-error done))))))
 
-(deftest contract-account-deposit-is-usdc-only-test
+(deftest contract-account-deposits-hype-as-value-to-its-system-address-test
   (async done
     (let [store (contract-store hype-to-spot)
           sent (atom [])
           {:keys [deps toasts]}
           (harness store (evm->core @store support/hype-index "1")
-                   {:send-contract-account-transactions! (sender sent (js/Promise.resolve []))})]
+                   {:send-contract-account-transactions! (sender sent (js/Promise.resolve [{:hash nil :queued? true}]))
+                    :submit-hyperevm-to-core! (fn [& _]
+                                                (throw (js/Error. "must not follow receipts")))})]
       (-> (js/Promise.resolve (effects/api-submit-funding-transfer! deps))
           (.then (fn [_]
-                   (is (= [] @sent) "nothing reached the wallet")
-                   (is (= [[:error effects/contract-account-usdc-only-message]] @toasts))
-                   (is (true? (get-in @store [:funding-ui :modal :open?])))
+                   (let [[[from [tx]]] @sent]
+                     (is (= 1 (count @sent)))
+                     (is (= support/owner from))
+                     (is (= {:from support/owner
+                             :to "0x2222222222222222222222222222222222222222"
+                             :chainId "0x3e7"
+                             :value "0xde0b6b3a7640000"}
+                            tx)
+                         "1 HYPE as value to HYPE's system address, which credits the sender"))
+                   (is (= [[:success effects/contract-account-sent-message]] @toasts))
+                   (is (false? (get-in @store [:funding-ui :modal :open?])))
                    (done)))
           (.catch (async-support/unexpected-error done))))))
 
@@ -154,3 +168,128 @@
              (get-in (preview (assoc-in ordinary [:wallet :contract-account-address]
                                         support/subaccount))
                      [:blocked :code]))))))
+
+;; ---------- Perps <-> HyperEVM in one batch ----------------------------------------
+
+(def ^:private usdc-perps-to-evm
+  {:transfer-from :perps :transfer-to :hyperevm :transfer-asset support/usdc-index})
+
+(def ^:private usdc-evm-to-perps
+  {:transfer-from :hyperevm :transfer-to :perps :transfer-asset support/usdc-index})
+
+(deftest only-a-contract-account-moves-between-perps-and-hyperevm-directly-test
+  (testing "the route is direct only in a contract account's modal"
+    (is (true? (:valid? (transfer-route/transfer-route
+                         (assoc usdc-perps-to-evm :transfer-direct? true)))))
+    (is (true? (:valid? (transfer-route/transfer-route
+                         (assoc usdc-evm-to-perps :transfer-direct? true)))))
+    (is (false? (:valid? (transfer-route/transfer-route usdc-perps-to-evm))))
+    (is (false? (:valid? (transfer-route/transfer-route usdc-evm-to-perps)))))
+  (testing "a direct route keeps Perps and HyperEVM when they are chosen or swapped"
+    (let [route (transfer-route/transfer-route
+                 (assoc usdc-perps-to-evm :transfer-direct? true))]
+      (is (= [:hyperevm :perps] (transfer-route/swapped route)))
+      (is (= [:perps :hyperevm] (transfer-route/with-location route :to :hyperevm)))))
+  (testing "an ordinary wallet still goes through Spot"
+    (let [route (transfer-route/transfer-route usdc-perps-to-evm)]
+      (is (= [:hyperevm :spot] (transfer-route/swapped route))))))
+
+(deftest contract-account-opens-transfer-with-the-direct-route-test
+  (let [modal-of (fn [state]
+                   (some (fn [[effect-id path modal]]
+                           (when (and (= :effects/save effect-id) (= [:funding-ui :modal] path))
+                             modal))
+                         (funding-actions/open-funding-transfer-modal state)))
+        state (support/state {})]
+    (is (false? (:transfer-direct? (modal-of state))))
+    (is (true? (:transfer-direct? (modal-of (assoc-in state [:wallet :contract-account-address]
+                                                      support/owner)))))))
+
+(deftest contract-account-moves-perps-usdc-to-hyperevm-in-one-batch-test
+  (async done
+    (let [store (contract-store usdc-perps-to-evm)
+          sent (atom [])
+          request (evm-preview/core->evm-request @store {:from :perps :to :hyperevm}
+                                                 (token @store support/usdc-index) "2.5")
+          {:keys [deps signed toasts]}
+          (harness store request
+                   {:send-contract-account-transactions!
+                    (sender sent (js/Promise.resolve [{:hash nil :queued? true}
+                                                      {:hash nil :queued? true}]))})]
+      (-> (effects/api-submit-funding-transfer! deps)
+          (.then (fn [_]
+                   (is (= [[support/owner
+                            [(core-writer/usd-class-transfer-tx "2.5" false)
+                             (core-writer/spot-usdc-to-evm-tx "2.5")]]]
+                          @sent)
+                       "Perps -> Spot, then Spot -> its own HyperEVM address, in one batch")
+                   (is (empty? @signed) "nothing goes through the single-send path")
+                   (is (= [[:success effects/contract-account-sent-message]] @toasts))
+                   (is (false? (get-in @store [:funding-ui :modal :open?])))
+                   (done)))
+          (.catch (async-support/unexpected-error done))))))
+
+(deftest contract-account-moves-only-usdc-from-perps-test
+  (async done
+    (let [store (contract-store usdc-perps-to-evm)
+          sent (atom [])
+          request (assoc-in (evm-preview/core->evm-request @store {:from :perps :to :hyperevm}
+                                                           (token @store support/hype-index) "1")
+                            [:evm :from] :perps)
+          {:keys [deps toasts]}
+          (harness store request
+                   {:send-contract-account-transactions! (sender sent (js/Promise.resolve []))})]
+      (-> (js/Promise.resolve (effects/api-submit-funding-transfer! deps))
+          (.then (fn [_]
+                   (is (= [] @sent))
+                   (is (= [[:error effects/contract-account-perps-usdc-only-message]] @toasts))
+                   (done)))
+          (.catch (async-support/unexpected-error done))))))
+
+(deftest contract-account-deposits-usdc-straight-into-perps-test
+  (async done
+    (let [store (contract-store usdc-evm-to-perps)
+          sent (atom [])
+          {:keys [deps toasts]}
+          (harness store (evm->core @store support/usdc-index "250.5" :perps)
+                   {:send-contract-account-transactions!
+                    (sender sent (js/Promise.resolve [{:hash nil :queued? true}
+                                                      {:hash nil :queued? true}]))})]
+      (-> (effects/api-submit-funding-transfer! deps)
+          (.then (fn [_]
+                   (let [[[_ [approve deposit]]] @sent]
+                     (is (= (abi/encode-approve core-deposit-wallet (js/BigInt "250500000"))
+                            (:data approve)))
+                     (is (= (abi/encode-core-deposit (js/BigInt "250500000") 0) (:data deposit))
+                         "destination dex 0: the account's own Perps balance"))
+                   (is (= [[:success effects/contract-account-sent-message]] @toasts))
+                   (done)))
+          (.catch (async-support/unexpected-error done))))))
+
+(deftest only-a-contract-account-may-deposit-straight-into-perps-test
+  (let [ordinary (support/state (assoc usdc-evm-to-perps :amount-input "10"))
+        contract (assoc-in ordinary [:wallet :contract-account-address] support/owner)
+        request (evm->core ordinary support/usdc-index "10" :perps)]
+    (is (nil? (transfer-invariants/check-request contract request)))
+    (is (re-find #"land in Spot" (transfer-invariants/check-request ordinary request)))
+    (is (re-find #"only USDC"
+                 (transfer-invariants/check-request
+                  contract
+                  (evm->core contract support/hype-index "1" :perps))))))
+
+(deftest contract-account-previews-the-direct-routes-test
+  (let [preview (fn [state] (evm-preview/evm-transfer-preview state
+                                                            (get-in state [:funding-ui :modal])
+                                                            support/now-ms))
+        contract (fn [modal]
+                   (assoc-in (support/state (assoc modal :amount-input "1" :transfer-direct? true))
+                             [:wallet :contract-account-address] support/owner))
+        to-evm (preview (contract usdc-perps-to-evm))
+        to-perps (preview (contract usdc-evm-to-perps))]
+    (is (true? (:ok? to-evm)) (pr-str (:blocked to-evm)))
+    (is (= :perps (get-in to-evm [:request :evm :from])))
+    (is (= "spot" (get-in to-evm [:request :action :sourceDex]))
+        "the request's send leaves Spot; the submit moves Perps -> Spot first")
+    (is (true? (:ok? to-perps)) (pr-str (:blocked to-perps)))
+    (is (= 0 (get-in to-perps [:request :action :destinationDex])))
+    (is (= :perps (get-in to-perps [:request :evm :to])))))

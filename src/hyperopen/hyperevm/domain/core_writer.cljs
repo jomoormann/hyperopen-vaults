@@ -230,3 +230,100 @@
      {:to core-writer-address
       :data data
       :chainId (:chain-id chain)})))
+
+;; ---------- General send-asset and staking -------------------------------------
+;;
+;; These encode what the caller hands them. Which destinations a contract
+;; account may name is decided by the caller
+;; (`hyperopen.api.trading.user-actions`); the encoders only refuse values
+;; that do not fit their ABI types. Vectors were produced with viem.
+
+(def ^:private token-delegate-action-id 3)
+
+(def ^:private staking-deposit-action-id 4)
+
+(def ^:private staking-withdraw-action-id 5)
+
+(def ^:private max-uint32
+  (js/BigInt "4294967295"))
+
+(defn spot-dex-id
+  "The dex id `sendAsset` uses for the spot balance."
+  []
+  spot-dex)
+
+(defn- uint-in-range
+  "`value` (a `js/BigInt`, a non-negative safe integer or digit text) as a
+   `js/BigInt` no greater than `max`, or nil."
+  [value max]
+  (let [n (cond
+            (= "bigint" (goog/typeOf value)) value
+            (and (number? value) (js/Number.isSafeInteger value) (>= value 0)) (js/BigInt value)
+            (and (string? value) (re-matches #"^\d+$" (str/trim value))) (js/BigInt (str/trim value))
+            :else nil)]
+    (when (and (some? n) (>= n (js/BigInt 0)) (<= n max))
+      n)))
+
+(defn- positive-uint64
+  [value]
+  (when-let [n (uint-in-range value max-uint64)]
+    (when (> n (js/BigInt 0)) n)))
+
+(defn send-asset-action
+  "Raw action bytes (hex, no `0x`) of `sendAsset` (action 13): `wei` of spot
+   token `token` from the sender (or its `sub-account`; the zero address for
+   none) on dex `source-dex` to `destination` on dex `destination-dex`. Nil
+   when any field is invalid."
+  [{:keys [destination sub-account source-dex destination-dex token wei]}]
+  (let [destination-word (address-word destination)
+        sub-account-word (address-word (or sub-account zero-address))
+        source (uint-in-range source-dex max-uint32)
+        target (uint-in-range destination-dex max-uint32)
+        token* (uint-in-range token max-uint64)
+        wei* (positive-uint64 wei)]
+    (when (and destination-word sub-account-word source target token* wei*)
+      (str (action-header send-asset-action-id)
+           destination-word
+           sub-account-word
+           (uint-word source)
+           (uint-word target)
+           (uint-word token*)
+           (uint-word wei*)))))
+
+(defn- core-writer-tx
+  [action-hex]
+  (when action-hex
+    {:to core-writer-address
+     :data (send-raw-action-calldata action-hex)
+     :chainId (:chain-id chain/mainnet)}))
+
+(defn send-asset-tx
+  "The HyperEVM transaction of `send-asset-action`, or nil."
+  [fields]
+  (core-writer-tx (send-asset-action fields)))
+
+(defn staking-deposit-tx
+  "Move `wei` HYPE (8 decimals) from the sender's spot balance to its staking
+   balance (action 4), or nil."
+  [wei]
+  (core-writer-tx (when-let [wei* (positive-uint64 wei)]
+                    (str (action-header staking-deposit-action-id) (uint-word wei*)))))
+
+(defn staking-withdraw-tx
+  "Move `wei` HYPE from the sender's staking balance back to its spot balance
+   (action 5), or nil."
+  [wei]
+  (core-writer-tx (when-let [wei* (positive-uint64 wei)]
+                    (str (action-header staking-withdraw-action-id) (uint-word wei*)))))
+
+(defn token-delegate-tx
+  "Delegate (or with `undelegate?`, undelegate) `wei` HYPE of the sender's
+   staking balance to `validator` (action 3), or nil."
+  [validator wei undelegate?]
+  (core-writer-tx (let [validator-word (address-word validator)
+                        wei* (positive-uint64 wei)]
+                    (when (and validator-word wei*)
+                      (str (action-header token-delegate-action-id)
+                           validator-word
+                           (uint-word wei*)
+                           (uint-word (if undelegate? 1 0)))))))

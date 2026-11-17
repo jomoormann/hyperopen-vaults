@@ -295,7 +295,9 @@
   "A HyperCore -> HyperEVM `sendAsset`. It always leaves Spot: a send from
    the Perps dex to a system address is not a supported route (see
    `transfer-route/supported-pair?`), and the pre-signing invariant refuses
-   any other `sourceDex`."
+   any other `sourceDex`. On a contract account's direct Perps -> HyperEVM
+   route (`:evm :from :perps`) the submit sends a Perps -> Spot move first,
+   in the same batch."
   [state route token amount]
   {:action {:type "sendAsset"
             :destination (:system-address token)
@@ -308,7 +310,10 @@
    :evm (assoc (evm-meta state token amount) :from (:from route))})
 
 (defn evm->core-request
-  [state token amount]
+  "A HyperEVM -> HyperCore move. It lands in Spot, or in Perps on a contract
+   account's direct route (`:evm :to :perps`, USDC through the
+   CoreDepositWallet)."
+  [state route token amount]
   {:action {:type "hyperEvmToCore"
             :kind (get evm->core-kind-wire (:kind token))
             :tokenIndex (:index token)
@@ -318,10 +323,12 @@
             :recipient (:evm->core-recipient token)
             :amount amount
             :units (units/units-text (units/parse-units amount (:evm-decimals token)))
-            :destinationDex (get-in chain/mainnet [:core-deposit-destination-dex :spot])
+            :destinationDex (get-in chain/mainnet [:core-deposit-destination-dex
+                                                   (if (= :perps (:to route)) :perps :spot)])
             :chainId (:chain-id chain/mainnet)}
    :route :evm->core
    :evm (assoc (evm-meta state token amount)
+               :to (:to route)
                :gas-kinds (evm-amounts/gas-kinds token))})
 
 (defn evm-transfer-preview
@@ -353,7 +360,7 @@
            {:ok? true
             :notice (:notice result)
             :request (if evm->core?
-                       (evm->core-request state token (:amount result))
+                       (evm->core-request state route token (:amount result))
                        (core->evm-request state route token (:amount result)))}))))))
 
 (defn gas-topup-request

@@ -252,6 +252,17 @@
                   row*)))
             (get-in state [:account-context :subaccounts :rows])))))
 
+(defn owned-subaccount-addresses
+  "Addresses of the loaded sub-accounts whose master is the owner."
+  [state]
+  (let [owner (owner-address state)]
+    (into []
+          (keep (fn [row]
+                  (let [row* (normalize-subaccount-row row)]
+                    (when (and owner (= owner (:master row*)))
+                      (:sub-account-user row*)))))
+          (get-in state [:account-context :subaccounts :rows]))))
+
 (defn selected-subaccount-owned-by-owner?
   [state]
   (let [owner (owner-address state)

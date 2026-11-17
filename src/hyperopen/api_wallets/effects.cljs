@@ -182,6 +182,9 @@
     (catch :default err
       (set-form-error! store (runtime-error-message err)))))
 
+(def contract-account-api-wallets-message
+  "A contract account manages its API wallets from the account itself. This app's own trading key is in the wallet menu.")
+
 (defn api-authorize-api-wallet!
   [{:keys [store
            approve-agent-request!
@@ -197,8 +200,17 @@
                                (get-in state [:api-wallets-ui :generated])
                                address)
         server-time-ms (get-in state [:api-wallets :server-time-ms])]
-    (if (seq validation-error)
+    (cond
+      ;; Approving an API wallet is a signature a contract account cannot
+      ;; give, and handing another key trading rights over a vault is the
+      ;; vault's own decision.
+      (account-context/contract-account? state)
+      (set-modal-error! store contract-account-api-wallets-message)
+
+      (seq validation-error)
       (set-modal-error! store validation-error)
+
+      :else
       (-> (approve-agent-request!
            (merge deps
                   {:store store
@@ -232,8 +244,14 @@
         row (get-in state [:api-wallets-ui :modal :row])
         default-row? (= :default (:row-kind row))
         approval-name (policy/approval-name-for-row row)]
-    (if-not (map? row)
+    (cond
+      (account-context/contract-account? state)
+      (set-modal-error! store contract-account-api-wallets-message)
+
+      (not (map? row))
       (set-modal-error! store "Select an API wallet row to remove.")
+
+      :else
       (-> (approve-agent-request!
            (merge deps
                   {:store store

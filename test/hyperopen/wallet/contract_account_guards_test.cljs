@@ -180,7 +180,7 @@
                         "no nonce was taken, nothing was signed")
                     (done)))))))
 
-(deftest contract-account-key-signs-trading-actions-only-test
+(deftest contract-account-key-signs-what-the-app-sends-only-test
   (let [allowed? (fn [action-type]
                    (agent-actions/contract-account-action-allowed?
                     vault-address
@@ -188,23 +188,32 @@
     (contract-account/remember! vault-address true)
     (doseq [action-type ["order" "cancel" "cancelByCloid" "modify" "batchModify"
                          "twapOrder" "twapCancel" "scheduleCancel"
-                         "updateLeverage" "updateIsolatedMargin"]]
-      (is (true? (allowed? action-type)) action-type))
-    (doseq [action-type ["vaultTransfer" "subAccountTransfer" "subAccountSpotTransfer"
-                         "createSubAccount" "subAccountModify" "borrowLend"
+                         "updateLeverage" "updateIsolatedMargin"
+                         ;; Hyperliquid only moves funds between a master and
+                         ;; its own sub-accounts here.
+                         "createSubAccount" "subAccountModify"
+                         "subAccountTransfer" "subAccountSpotTransfer"
+                         "vaultTransfer" "borrowLend"
                          "setReferrer" "registerReferrer" "claimRewards"
-                         "userOutcome" "somethingNew" nil]]
+                         "userOutcome"]]
+      (is (true? (allowed? action-type)) action-type))
+    ;; Action types the app never sends stay refused, so a later feature has
+    ;; to be added to the list on purpose.
+    (doseq [action-type ["agentSetAbstraction" "agentEnableDexAbstraction" "evmUserModify"
+                         "agentSendAsset" "cDeposit2" "reserveRequestWeight"
+                         "hip3LiquidatorTransfer" "createVault" "spotDeploy" "perpDeploy"
+                         "gossipPriorityBid" "noop" "somethingNew" nil]]
       (is (false? (allowed? action-type)) (str action-type)))
     (is (true? (agent-actions/contract-account-action-allowed?
                 vault-address
                 #js {:type "order"}))
         "a JS action object is read too")
     (contract-account/remember! vault-address false)
-    (is (true? (allowed? "vaultTransfer")) "an ordinary wallet's key is not limited")
+    (is (true? (allowed? "createVault")) "an ordinary wallet's key is not limited")
     (contract-account/reset-detections!)
-    (is (true? (allowed? "vaultTransfer")) "nor is an account that was not checked")))
+    (is (true? (allowed? "createVault")) "nor is an account that was not checked")))
 
-(deftest contract-account-key-refuses-a-fund-move-before-it-signs-test
+(deftest contract-account-key-refuses-other-actions-before-it-signs-test
   (async done
     (contract-account/remember! vault-address true)
     (let [store (vault-store)
@@ -213,17 +222,14 @@
                         (.then (fn [_] ::resolved))
                         (.catch (fn [err] (.-message err)))))]
       (-> (js/Promise.all
-           #js [(refused (agent-actions/submit-vault-transfer!
+           #js [(refused (agent-actions/resolve-signing-context!
                           store
                           vault-address
-                          {:type "vaultTransfer"
-                           :vaultAddress "0x1111111111111111111111111111111111111111"
-                           :isDeposit true
-                           :usd 1000000}))
+                          {:type "hip3LiquidatorTransfer"}))
                 (refused (agent-actions/resolve-signing-context!
                           store
                           vault-address
-                          {:type "subAccountTransfer"}))])
+                          {:type "reserveRequestWeight"}))])
           (.then (fn [messages]
                    (is (= [agent-actions/contract-account-agent-action-message
                            agent-actions/contract-account-agent-action-message]
@@ -294,3 +300,212 @@
         (.catch (fn [err]
                   (is (re-find #"rejected" (.-message err)))
                   (done))))))
+
+;; ---------- Funds that stay with the account ---------------------------------
+
+(def ^:private own-sub-account "0x5555555555555555555555555555555555555555")
+(def ^:private hype-wire-id "HYPE:0x0d01dc56dcaaca66ad901c959b4011ec")
+
+(defn- vault-store-with-sub-account
+  []
+  (let [store (funded-vault-store)]
+    (swap! store assoc-in [:account-context :subaccounts :rows]
+           [{:subAccountUser own-sub-account :master vault-address}
+            {:subAccountUser "0x6666666666666666666666666666666666666666"
+             :master "0x7777777777777777777777777777777777777777"}])
+    store))
+
+(defn- sent-calldata
+  "Send `action` from the vault and resolve the calldata of the one
+   transaction the wallet was handed."
+  [store submit! action]
+  (let [requests (atom [])]
+    (provider-registry/set-provider-override!
+     (fake-wallet requests (js/Promise.resolve "0xhash")))
+    (-> (submit! store vault-address action)
+        (.then (fn [response]
+                 (is (= "ok" (:status response)))
+                 (let [sent (filter #(= "eth_sendTransaction" (first %)) @requests)
+                       [[_ [tx]]] sent]
+                   (is (= 1 (count sent)))
+                   (is (= core-writer/core-writer-address (:to tx)))
+                   (:data tx)))))))
+
+(defn- send-asset-data
+  [fields]
+  (:data (core-writer/send-asset-tx fields)))
+
+(deftest contract-account-sends-stay-with-the-account-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (let [store (vault-store-with-sub-account)
+          send! user-actions/submit-send-asset!
+          spot (core-writer/spot-dex-id)]
+      (-> (sent-calldata store send!
+                         {:type "sendAsset" :destination "0x2222222222222222222222222222222222222222"
+                          :sourceDex "spot" :destinationDex "spot" :token hype-wire-id
+                          :amount "0.5" :fromSubAccount ""})
+          (.then (fn [data]
+                   (is (= (send-asset-data {:destination "0x2222222222222222222222222222222222222222"
+                                            :source-dex spot :destination-dex spot
+                                            :token 150 :wei 50000000})
+                          data)
+                       "HYPE back to the account's own HyperEVM address")
+                   (sent-calldata store send!
+                                  {:type "sendAsset" :destination vault-address
+                                   :sourceDex "" :destinationDex "spot" :token usdc-wire-id
+                                   :amount "2" :fromSubAccount ""})))
+          (.then (fn [data]
+                   (is (= (send-asset-data {:destination vault-address :source-dex 0
+                                            :destination-dex spot :token 0 :wei 200000000})
+                          data)
+                       "between the account's own balances")
+                   (sent-calldata store send!
+                                  {:type "sendAsset" :destination own-sub-account
+                                   :sourceDex "spot" :destinationDex "spot" :token usdc-wire-id
+                                   :amount "1" :fromSubAccount ""})))
+          (.then (fn [data]
+                   (is (= (send-asset-data {:destination own-sub-account :source-dex spot
+                                            :destination-dex spot :token 0 :wei 100000000})
+                          data)
+                       "to its own sub-account")
+                   (sent-calldata store send!
+                                  {:type "sendAsset" :destination vault-address
+                                   :sourceDex "spot" :destinationDex "spot" :token usdc-wire-id
+                                   :amount "1" :fromSubAccount own-sub-account})))
+          (.then (fn [data]
+                   (is (= (send-asset-data {:destination vault-address :sub-account own-sub-account
+                                            :source-dex spot :destination-dex spot
+                                            :token 0 :wei 100000000})
+                          data)
+                       "from its own sub-account back to itself")
+                   (done)))
+          (.catch (fn [err]
+                    (is false (str "unexpected: " (.-message err)))
+                    (done)))))))
+
+(deftest contract-account-never-sends-to-a-sub-account-it-does-not-own-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (let [requests (atom [])
+          store (vault-store-with-sub-account)
+          foreign-sub "0x6666666666666666666666666666666666666666"
+          refused (fn [action]
+                    (-> (user-actions/submit-send-asset! store vault-address action)
+                        (.then (fn [_] ::resolved))
+                        (.catch (fn [err] (.-message err)))))
+          base {:type "sendAsset" :sourceDex "spot" :destinationDex "spot"
+                :token usdc-wire-id :amount "1" :fromSubAccount ""}]
+      (provider-registry/set-provider-override!
+       (fake-wallet requests (js/Promise.resolve "0xhash")))
+      (-> (js/Promise.all
+           #js [(refused (assoc base :destination foreign-sub))
+                (refused (assoc base :destination vault-address :fromSubAccount foreign-sub))
+                (refused (assoc base :destination "0x2222222222222222222222222222222222222222"))])
+          (.then (fn [messages]
+                   (is (= (repeat 3 user-actions/contract-account-send-asset-message) (vec messages)))
+                   (is (= [] @requests) "nothing reached the wallet")
+                   (done)))))))
+
+(deftest contract-account-stakes-with-transactions-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (let [store (vault-store)
+          validator "0x3333333333333333333333333333333333333334"]
+      (-> (sent-calldata store user-actions/submit-c-deposit! {:type "cDeposit" :wei 250000000})
+          (.then (fn [data]
+                   (is (= (:data (core-writer/staking-deposit-tx 250000000)) data))
+                   (sent-calldata store user-actions/submit-c-withdraw! {:type "cWithdraw" :wei 1})))
+          (.then (fn [data]
+                   (is (= (:data (core-writer/staking-withdraw-tx 1)) data))
+                   (sent-calldata store user-actions/submit-token-delegate!
+                                  {:type "tokenDelegate" :validator validator
+                                   :wei 100000000 :isUndelegate true})))
+          (.then (fn [data]
+                   (is (= (:data (core-writer/token-delegate-tx validator 100000000 true)) data))
+                   (is (nil? (get-in @store [:wallet :user-signed-nonce-cursor]))
+                       "nothing was signed")
+                   (done)))
+          (.catch (fn [err]
+                    (is false (str "unexpected: " (.-message err)))
+                    (done)))))))
+
+(deftest contract-account-staking-refuses-an-invalid-amount-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (let [requests (atom [])]
+      (provider-registry/set-provider-override!
+       (fake-wallet requests (js/Promise.resolve "0xhash")))
+      (-> (user-actions/submit-c-deposit! (vault-store) vault-address {:type "cDeposit" :wei 0})
+          (.then (fn [_] (is false "must not resolve") (done)))
+          (.catch (fn [err]
+                    (is (= user-actions/contract-account-staking-invalid-message (.-message err)))
+                    (is (= [] @requests))
+                    (done)))))))
+
+(deftest contract-account-moves-to-a-named-perp-dex-of-its-own-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (let [store (funded-vault-store)
+          requests (atom [])]
+      ;; Hyperliquid's perpDexs list is [null, xyz, flx, ...]: flx is dex 2.
+      (swap! store assoc :perp-dexs ["xyz" "flx"])
+      (-> (sent-calldata store user-actions/submit-send-asset!
+                         {:type "sendAsset" :destination vault-address
+                          :sourceDex "" :destinationDex "flx" :token usdc-wire-id
+                          :amount "1" :fromSubAccount ""})
+          (.then (fn [data]
+                   (is (= (send-asset-data {:destination vault-address :source-dex 0
+                                            :destination-dex 2 :token 0 :wei 100000000})
+                          data))
+                   (provider-registry/set-provider-override!
+                    (fake-wallet requests (js/Promise.resolve "0xhash")))
+                   (-> (user-actions/submit-send-asset!
+                        store vault-address
+                        {:type "sendAsset" :destination vault-address
+                         :sourceDex "" :destinationDex "unknown" :token usdc-wire-id
+                         :amount "1" :fromSubAccount ""})
+                       (.then (fn [_] ::resolved))
+                       (.catch (fn [err] (.-message err))))))
+          (.then (fn [message]
+                   (is (= user-actions/contract-account-send-asset-message message)
+                       "a dex the app doesn't know is refused")
+                   (is (= [] @requests))
+                   (done)))
+          (.catch (fn [err]
+                    (is false (str "unexpected: " (.-message err)))
+                    (done)))))))
+
+(deftest contract-account-stakes-from-spot-in-one-batch-test
+  (async done
+    (contract-account/remember! vault-address true)
+    (let [requests (atom [])
+          validator "0x3333333333333333333333333333333333333334"
+          wallet #js {:request (fn [args]
+                                 (let [method (unchecked-get args "method")
+                                       params (js->clj (unchecked-get args "params")
+                                                       :keywordize-keys true)]
+                                   (swap! requests conj [method params])
+                                   (case method
+                                     "eth_chainId" (js/Promise.resolve "0x3e7")
+                                     "wallet_getCapabilities"
+                                     (js/Promise.resolve
+                                      #js {"0x3e7" #js {:atomicBatch #js {:supported true}}})
+                                     "wallet_sendCalls" (js/Promise.resolve #js {:id "batch-1"})
+                                     (js/Promise.reject (js/Error. (str "unexpected " method))))))}]
+      (provider-registry/set-provider-override! wallet)
+      (-> (user-actions/submit-token-delegate!
+           (vault-store) vault-address
+           {:type "tokenDelegate" :validator validator :wei 100000000
+            :isUndelegate false :stakeFromSpotWei 75000000})
+          (.then (fn [response]
+                   (is (= "ok" (:status response)))
+                   (let [[[_ [batch]]] (filter #(= "wallet_sendCalls" (first %)) @requests)]
+                     (is (= [(:data (core-writer/staking-deposit-tx 75000000))
+                             (:data (core-writer/token-delegate-tx validator 100000000 false))]
+                            (mapv :data (:calls batch)))
+                         "Spot -> staking, then the delegation, as one transaction"))
+                   (done)))
+          (.catch (fn [err]
+                    (is false (str "unexpected: " (.-message err)))
+                    (done)))))))

@@ -156,7 +156,7 @@
   [state]
   (when (contract-account/contract-account-state? state)
     {:title "Contract account"
-     :hint "Trade here with a passkey-locked key. Move funds out and change account settings from the account itself."}))
+     :hint "Trade here with a passkey-locked key. Sends to other addresses and withdrawals to other chains go from the account itself."}))
 
 (defn- wallet-vm
   [state]

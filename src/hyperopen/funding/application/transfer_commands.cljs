@@ -193,6 +193,7 @@
                          :transfer-dex transfer-dex
                          :transfer-destination-address transfer-destination-address
                          :transfer-from-subaccount transfer-from-subaccount
+                         :transfer-direct? (account-context/contract-account? state)
                          :destination-input (or (wallet-address state) ""))
                   (modal-state/with-open-focus-metadata base opener-data-role))
         modal* (if-not preset?

@@ -74,6 +74,9 @@
 (def ^:private hype-wei-factor
   (js/BigInt "100000000"))
 
+(def ^:private hype-wei-factor-number
+  100000000)
+
 (def ^:private validator-sort-column-aliases
   {:name :name
    :description :description
@@ -622,7 +625,14 @@
         amount-input (get-in state [:staking-ui :delegate-amount])
         amount (parse-amount-number state amount-input)
         wei (parse-hype-input->wei state amount-input)
-        available (undelegated-hype-available state)]
+        available (undelegated-hype-available state)
+        ;; A contract account can stake straight from Spot: it sends the
+        ;; missing HYPE to its staking balance and the delegation as one
+        ;; batch (`user-actions/submit-token-delegate!`).
+        from-spot? (account-context/contract-account? state)
+        spot-available (or (spot-hype-available state) 0)
+        from-spot-wei (when (and from-spot? (some? wei) (finite-number? amount) (> amount available))
+                        (- wei (js/Math.round (* available hype-wei-factor-number))))]
     (cond
       (seq blocked-message)
       (submit-guard-error :delegate? blocked-message)
@@ -637,20 +647,31 @@
       (submit-guard-error :delegate? "Enter a valid amount up to 8 decimals.")
 
       (and (finite-number? amount)
-           (> amount available))
+           (> amount available)
+           (not from-spot?))
       (submit-guard-error :delegate? "Amount exceeds available staking balance.")
 
+      (and from-spot?
+           (finite-number? amount)
+           (> amount (+ available spot-available)))
+      (submit-guard-error :delegate? "Amount exceeds your staking balance and the HYPE in your spot balance.")
+
       (not (account-scope/resource-ready? state :delegator-summary))
+      (submit-guard-error :delegate? "Staking account data is still loading. Please try again.")
+
+      (and (some? from-spot-wei) (not (account-scope/resource-ready? state :spot-state)))
       (submit-guard-error :delegate? "Staking account data is still loading. Please try again.")
 
       :else
       (into (start-submit-effects :delegate?)
             [[:effects/api-submit-staking-delegate
               {:kind :delegate
-               :action {:type "tokenDelegate"
-                        :validator validator
-                        :wei wei
-                        :isUndelegate false}}]]))))
+               :action (cond-> {:type "tokenDelegate"
+                                :validator validator
+                                :wei wei
+                                :isUndelegate false}
+                         (and (some? from-spot-wei) (pos? from-spot-wei))
+                         (assoc :stakeFromSpotWei from-spot-wei))}]]))))
 
 (defn submit-staking-undelegate
   ([state]

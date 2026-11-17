@@ -211,20 +211,96 @@
                   {:hash nil :queued? true}
                   (js/Promise.reject err)))))))
 
+;; ---------- Batches (EIP-5792) --------------------------------------------------
+
+(defn- capability
+  [capabilities k]
+  (when (some? capabilities)
+    (if (map? capabilities)
+      (or (get capabilities (keyword k)) (get capabilities k))
+      (unchecked-get capabilities k))))
+
+(defn atomic-batch-supported?
+  "True when a `wallet_getCapabilities` answer says the wallet runs a batch
+   of calls on HyperEVM as one transaction: the older EIP-5792 shape
+   (`atomicBatch.supported`, which Zodiac Pilot answers) or the newer one
+   (`atomic.status` \"supported\" or \"ready\")."
+  [capabilities]
+  (let [on-chain (or (capability capabilities (:chain-id chain/mainnet))
+                     (capability capabilities (str (:chain-id-decimal chain/mainnet))))]
+    (boolean
+     (or (true? (capability (capability on-chain "atomicBatch") "supported"))
+         (contains? #{"supported" "ready"}
+                    (capability (capability on-chain "atomic") "status"))))))
+
+(defn- request!
+  [provider method params]
+  (.request provider (clj->js {:method method :params params})))
+
+(defn- wallet-batches?
+  "Ask the wallet whether it runs batches atomically. Any failure means no:
+   the transactions then go one by one."
+  [provider from]
+  (-> (js/Promise.resolve nil)
+      (.then (fn [_] (request! provider "wallet_getCapabilities" [from])))
+      (.then atomic-batch-supported? (fn [_] false))))
+
+(defn- call
+  [{:keys [to data value]}]
+  (cond-> {:to to}
+    (some? data) (assoc :data data)
+    (some? value) (assoc :value value)))
+
+(defn send-calls!
+  "Hand `txs` to the wallet as one EIP-5792 batch (`wallet_sendCalls`), which
+   a Safe executes as one transaction. Resolves with one `{:hash nil :queued?
+   true :batch-id id}` per transaction: the app follows no hash, it asks
+   Hyperliquid. A wallet that queues the batch without simulating it
+   (`queued-by-wallet?`) took it too. Rejects when the wallet refused it."
+  [provider from txs]
+  (-> (js/Promise.resolve nil)
+      (.then (fn [_]
+               (request! provider "wallet_sendCalls"
+                         [{:version "2.0.0"
+                           :chainId (:chain-id chain/mainnet)
+                           :from from
+                           :atomicRequired true
+                           :calls (mapv call txs)}])))
+      (.then (fn [response]
+               (let [id (if (string? response) response (capability response "id"))]
+                 (vec (repeat (count txs) {:hash nil :queued? true :batch-id id}))))
+             (fn [err]
+               (if (queued-by-wallet? err)
+                 (vec (repeat (count txs) {:hash nil :queued? true}))
+                 (js/Promise.reject err))))))
+
+(defn- send-one-by-one!
+  [provider from txs]
+  (reduce (fn [sent tx]
+            (.then sent
+                   (fn [results]
+                     (-> (send-transaction! provider from tx)
+                         (.then (fn [result] (conj results result)))))))
+          (js/Promise.resolve [])
+          txs))
+
 (defn send-transactions!
-  "Switch the connected wallet to HyperEVM and hand it `txs` one after the
-   other. Resolves with one `send-transaction!` result per transaction and
-   rejects at the first one the wallet refuses."
+  "Switch the connected wallet to HyperEVM and hand it `txs`. Two or more go
+   as one batch when the wallet runs batches atomically (`send-calls!`), so
+   the account signs and executes them as one transaction; otherwise one
+   after the other, each waiting for the wallet's answer to the previous
+   one. Resolves with one result per transaction and rejects when the wallet
+   refuses."
   [from txs]
   (let [provider (provider-registry/provider)]
     (if-not provider
       (js/Promise.reject (js/Error. "No wallet provider found. Connect your wallet first."))
       (-> (wallet-rpc/ensure-wallet-chain! provider (assoc chain/mainnet :verify-switch? true))
           (.then (fn [_]
-                   (reduce (fn [sent tx]
-                             (.then sent
-                                    (fn [results]
-                                      (-> (send-transaction! provider from tx)
-                                          (.then (fn [result] (conj results result)))))))
-                           (js/Promise.resolve [])
-                           txs)))))))
+                   (if (< (count txs) 2)
+                     (send-one-by-one! provider from txs)
+                     (-> (wallet-batches? provider from)
+                         (.then (fn [batches?]
+                                  (if batches?
+                                    (send-calls! provider from txs)
+                                    (send-one-by-one! provider from txs))))))))))))

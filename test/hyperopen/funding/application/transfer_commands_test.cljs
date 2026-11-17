@@ -40,7 +40,9 @@
             :hyperunit-lifecycle (funding-actions/default-hyperunit-lifecycle-state)
             :hyperunit-fee-estimate (funding-actions/default-hyperunit-fee-estimate-state)
             :hyperunit-withdrawal-queue (funding-actions/default-hyperunit-withdrawal-queue-state)
-            :submitting? false :error nil}
+            :submitting? false :error nil
+            ;; Not a contract account: no direct Perps <-> HyperEVM route.
+            :transfer-direct? false}
            (apply dissoc modal new-transfer-keys)))))
 
 (deftest open-preset-routes-and-assets-test

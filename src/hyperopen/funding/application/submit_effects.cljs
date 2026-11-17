@@ -4,13 +4,18 @@
             [hyperopen.funding.application.hyperevm-run-state :as hyperevm-run-state]
             [hyperopen.funding.application.hyperevm-transfer-effects :as hyperevm-transfer-effects]
             [hyperopen.funding.domain.transfer-invariants :as transfer-invariants]
+            [hyperopen.hyperevm.domain.core-writer :as core-writer]
+            [hyperopen.hyperevm.domain.tokens :as tokens]
             [hyperopen.hyperevm.domain.txs :as txs]))
 
 (def contract-account-sent-message
   "Sent to your wallet. It applies when the transaction is executed.")
 
 (def contract-account-usdc-only-message
-  "A contract account can only move USDC between HyperEVM and Spot here.")
+  "A contract account can't move this token from HyperEVM here.")
+
+(def contract-account-perps-usdc-only-message
+  "Only USDC moves between Perps and HyperEVM.")
 
 (defn- spectate-mode-submit-error
   [store]
@@ -244,14 +249,13 @@
                                        (if (seq error-text) error-text "Unknown runtime error"))]
                       (set-funding-submit-error! store show-toast! message))))))))
 
-(defn- submit-contract-account-deposit!
-  "A contract account's HyperEVM -> Spot move of USDC: the approval for
-   exactly the amount and the deposit, handed to the wallet one after the
-   other. Nothing here waits for a receipt, because a contract wallet's
-   transactions may be executed hours later, by someone else. The deposit
-   credits the sender, so the funds stay in the same account."
+(defn- send-contract-account-plan!
+  "Hand a contract account's `plan` (HyperEVM transactions) to the wallet,
+   unless `refusal` says why not. The wallet takes two or more as one batch
+   when it can (`contract-account/send-transactions!`). Nothing here waits
+   for a receipt, because a contract wallet's transactions may be executed
+   hours later, by someone else; the modal closes once the wallet took them."
   [{:keys [store
-           request
            dispatch!
            send-contract-account-transactions!
            runtime-error-message
@@ -259,25 +263,16 @@
            default-funding-modal-state
            set-funding-submit-error!
            close-funding-modal!
-           refresh-after-funding-submit!]}]
-  (let [state @store
-        owner (account-context/owner-address state)
-        action (:action request)
-        refusal (or (account-context/hyperevm-moves-blocked-message state)
-                    (transfer-invariants/check-request state request)
-                    (when-not (= "usdcCoreDeposit" (:kind action))
-                      contract-account-usdc-only-message)
-                    (when-not (fn? send-contract-account-transactions!)
-                      "Transfers from HyperEVM aren't available right now."))
-        plan (when-not refusal
-               [(txs/usdc-approve-tx owner action)
-                (txs/usdc-core-deposit-tx owner action)])]
+           refresh-after-funding-submit!]}
+   refusal
+   plan]
+  (let [owner (account-context/owner-address @store)]
     (cond
       (seq refusal)
       (set-funding-submit-error! store show-toast! refusal)
 
-      (some nil? plan)
-      (set-funding-submit-error! store show-toast! "Transfer failed: the deposit could not be built.")
+      (or (empty? plan) (some nil? plan))
+      (set-funding-submit-error! store show-toast! "Transfer failed: the move could not be built.")
 
       :else
       (-> (try
@@ -294,6 +289,56 @@
                           message (str "Transfer failed: "
                                        (if (seq error-text) error-text "Unknown runtime error"))]
                       (set-funding-submit-error! store show-toast! message))))))))
+
+(defn- contract-account-refusal
+  [{:keys [store request send-contract-account-transactions!]}]
+  (let [state @store]
+    (or (account-context/hyperevm-moves-blocked-message state)
+        (transfer-invariants/check-request state request)
+        (when-not (fn? send-contract-account-transactions!)
+          "Transfers from HyperEVM aren't available right now."))))
+
+(defn- submit-contract-account-deposit!
+  "A contract account's HyperEVM -> HyperCore move: for USDC the approval for
+   exactly the amount and the deposit (into Spot, or into Perps on the direct
+   route), for HYPE and other linked tokens one transfer to the token's
+   system address. Every kind credits the sender, so the funds stay in the
+   same account; the invariant check has already matched recipient, token
+   and destination."
+  [{:keys [store request] :as deps}]
+  (let [owner (account-context/owner-address @store)
+        action (:action request)
+        refusal (or (contract-account-refusal deps)
+                    (when-not (contains? #{"usdcCoreDeposit" "native" "erc20"} (:kind action))
+                      contract-account-usdc-only-message))
+        plan (when-not refusal
+               (case (:kind action)
+                 "usdcCoreDeposit" [(txs/usdc-approve-tx owner action)
+                                    (txs/usdc-core-deposit-tx owner action)]
+                 "native" [(txs/native-to-core-tx owner action)]
+                 "erc20" [(txs/erc20-to-core-tx owner action)]))]
+    (send-contract-account-plan! deps refusal plan)))
+
+(defn- usdc-wire-id
+  [state]
+  (:wire-id (tokens/token-by-index (get-in state [:spot :meta]) 0)))
+
+(defn- submit-contract-account-perps-to-evm!
+  "A contract account's direct Perps -> HyperEVM move of USDC as one batch:
+   CoreWriter action 7 (Perps -> Spot), then action 13 to USDC's system
+   address (Spot -> the account's own HyperEVM address). Both encoders fix
+   everything but the amount, so neither can name another account."
+  [{:keys [store request] :as deps}]
+  (let [state @store
+        amount (get-in request [:action :amount])
+        refusal (or (contract-account-refusal deps)
+                    (when-not (and (some? (usdc-wire-id state))
+                                   (= (usdc-wire-id state) (get-in request [:action :token])))
+                      contract-account-perps-usdc-only-message))
+        plan (when-not refusal
+               [(core-writer/usd-class-transfer-tx amount false)
+                (core-writer/spot-usdc-to-evm-tx amount)])]
+    (send-contract-account-plan! deps refusal plan)))
 
 (defn api-submit-funding-transfer!
   "Submit a Transfer request, by what it moves:
@@ -317,9 +362,17 @@
         "hyperEvmToCore" (if contract-account?
                            (submit-contract-account-deposit! deps)
                            (hyperevm-transfer-effects/submit-evm-to-core! deps))
-        "sendAsset" (if (and (= :core->evm (:route request))
-                             (not contract-account?))
+        "sendAsset" (cond
+                      (not= :core->evm (:route request))
+                      (submit-transfer-request! deps)
+
+                      (not contract-account?)
                       (hyperevm-transfer-effects/submit-core-to-evm! deps)
+
+                      (= :perps (get-in request [:evm :from]))
+                      (submit-contract-account-perps-to-evm! deps)
+
+                      :else
                       (submit-transfer-request! deps))
         (submit-transfer-request! deps)))))
 

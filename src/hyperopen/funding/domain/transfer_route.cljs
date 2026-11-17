@@ -93,12 +93,19 @@
      (`sourceDex \"\"`) for USDC's system address has never been seen
      bridged live (only `sourceDex \"spot\"` has), and if HyperCore credited
      the system address's Spot without bridging it the USDC would be
-     stranded. It goes Perps -> Spot -> HyperEVM until it is verified."
-  [from to]
+     stranded. It goes Perps -> Spot -> HyperEVM until it is verified.
+
+   With `direct?` (a contract account's modal, see `:transfer-direct?`)
+   both directions are supported, for USDC: a contract account sends the two
+   steps as one batch of transactions (Perps -> Spot, then Spot -> HyperEVM;
+   or a CoreDepositWallet deposit straight into Perps), so nothing is left
+   half way."
+  [from to direct?]
   (boolean (and from to
                 (not= from to)
-                (not (and (= :hyperevm from) (= :perps to)))
-                (not (and (= :perps from) (= :hyperevm to))))))
+                (or direct?
+                    (and (not (and (= :hyperevm from) (= :perps to)))
+                         (not (and (= :perps from) (= :hyperevm to))))))))
 
 (defn perps-evm-pair?
   "Whether `route` joins Perps and HyperEVM directly (unsupported both
@@ -107,22 +114,26 @@
   (= #{:perps :hyperevm} (set [from to])))
 
 (defn transfer-route
-  "`{:from :to :valid? bool :legacy? bool}` for the modal.
+  "`{:from :to :valid? bool :legacy? bool}` for the modal, plus `:direct?
+   true` when the modal moves USDC between Perps and HyperEVM in one step
+   (`:transfer-direct?`, a contract account's).
 
    Both locations nil derives the legacy route from `:to-perp?`. Both set,
    distinct and supported is valid. Anything else is invalid and keeps what
    was set, so the preview can block with `:invalid-route`."
   [modal]
   (let [from (normalize-location (:transfer-from modal))
-        to (normalize-location (:transfer-to modal))]
+        to (normalize-location (:transfer-to modal))
+        direct? (true? (:transfer-direct? modal))]
     (if (and (nil? from) (nil? to))
       (if (true? (:to-perp? modal))
         {:from :spot :to :perps :valid? true :legacy? true}
         {:from :perps :to :spot :valid? true :legacy? true})
-      {:from from
-       :to to
-       :valid? (supported-pair? from to)
-       :legacy? false})))
+      (cond-> {:from from
+               :to to
+               :valid? (supported-pair? from to direct?)
+               :legacy? false}
+        direct? (assoc :direct? true)))))
 
 (defn route-kind
   "`:core-internal`, `:core->evm` or `:evm->core`, from whichever side names
@@ -148,13 +159,13 @@
    Choosing the location the other side already has swaps the two. The side
    just set wins over an unsupported Perps <-> HyperEVM pair: the other side
    becomes Spot."
-  [{:keys [from to]} side location]
+  [{:keys [from to direct?]} side location]
   (let [[from* to*] (case side
                       :from (if (= location to) [location from] [location to])
                       :to (if (= location from) [to location] [from location])
                       [from to])]
     (cond
-      (perps-evm-pair? {:from from* :to to*})
+      (and (perps-evm-pair? {:from from* :to to*}) (not direct?))
       (if (= :from side) [from* :spot] [:spot to*])
 
       :else [from* to*])))
@@ -162,8 +173,9 @@
 (defn swapped
   "The route with its sides swapped; an unsupported Perps <-> HyperEVM
    result keeps its new source and goes to (or from) Spot instead."
-  [{:keys [from to]}]
+  [{:keys [from to direct?]}]
   (cond
+    direct? [to from]
     (and (= :perps from) (= :hyperevm to)) [:hyperevm :spot]
     (and (= :hyperevm from) (= :perps to)) [:perps :spot]
     :else [to from]))
@@ -181,7 +193,10 @@
 
 (defn- location-reason
   [state {:keys [from] :as route} side location]
-  (let [hyperevm-block (account-context/hyperevm-moves-blocked-message state)]
+  (let [hyperevm-block (account-context/hyperevm-moves-blocked-message state)
+        ;; A contract account moves USDC between Perps and HyperEVM in one
+        ;; batch (`supported-pair?`).
+        direct? (account-context/contract-account? state)]
     (cond
       (and (= :hyperevm location) hyperevm-block)
       hyperevm-block
@@ -189,13 +204,13 @@
       (and (= :perps location) (availability/unified-account-mode? state))
       unified-perps-reason
 
-      (and (= :to side) (= :perps location) (= :hyperevm from))
+      (and (= :to side) (= :perps location) (= :hyperevm from) (not direct?))
       evm-to-perps-reason
 
       (pooled-perps-evm-pair? state route side location)
       pooled-perps-evm-reason
 
-      (and (= :to side) (= :hyperevm location) (= :perps from))
+      (and (= :to side) (= :hyperevm location) (= :perps from) (not direct?))
       perps-to-evm-reason
 
       :else nil)))
@@ -233,10 +248,15 @@
     (tokens/token-by-index (get-in state [:spot :meta]) index)))
 
 (defn- source-tokens
+  "The linked tokens the route can move: none on Perps <-> Spot, USDC only
+   on a direct Perps <-> HyperEVM route, every one otherwise."
   [state route]
-  (if (and (evm-route? route) (not (perps-evm-pair? route)))
-    (linked-tokens state)
-    []))
+  (cond
+    (not (evm-route? route)) []
+    (perps-evm-pair? route) (if (:direct? route)
+                              (filterv #(= :usdc-cdw (:kind %)) (linked-tokens state))
+                              [])
+    :else (linked-tokens state)))
 
 (defn- health-reason
   [health]

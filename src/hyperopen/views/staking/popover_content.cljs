@@ -48,12 +48,12 @@
             :class ["h-10"
                     "w-full"
                     "rounded-[10px]"
-                    "bg-[#0f544b]"
+                    "bg-ho-accent"
                     "text-sm"
                     "font-normal"
-                    "text-[#021510]"
+                    "text-[#041914]"
                     "transition-colors"
-                    "hover:bg-[#1a6f63]"
+                    "hover:bg-[#6de3d5]"
                     "disabled:cursor-not-allowed"
                     "disabled:opacity-65"]
             :disabled submitting?

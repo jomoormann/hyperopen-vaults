@@ -26,8 +26,10 @@
   (evm-preview/core->evm-request state {:from :spot :to :hyperevm} (token state index) amount))
 
 (defn evm->core
-  [state index amount]
-  (evm-preview/evm->core-request state (token state index) amount))
+  ([state index amount]
+   (evm->core state index amount :spot))
+  ([state index amount to]
+   (evm-preview/evm->core-request state {:from :hyperevm :to to} (token state index) amount)))
 
 (defn store-for
   [modal-overrides]

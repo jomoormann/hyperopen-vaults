@@ -280,6 +280,33 @@
     (is (= "generation failed"
            (get-in @store [:api-wallets-ui :form-error])))))
 
+(deftest contract-account-cannot-authorize-or-remove-api-wallets-here-test
+  (let [approve-calls (atom 0)
+        store (atom {:wallet {:address owner-address
+                              :contract-account-address owner-address}
+                     :api-wallets-ui {:form {:name "desk"
+                                             :address generated-address
+                                             :days-valid "30"}
+                                      :modal {:open? true
+                                              :type :authorize
+                                              :submitting? true
+                                              :error nil
+                                              :row {:row-kind :named :name "desk"}}}})
+        deps {:store store
+              :approve-agent-request! (fn [_opts]
+                                        (swap! approve-calls inc)
+                                        (js/Promise.resolve :ok))
+              :load-api-wallets! (fn [_opts] (js/Promise.resolve :reloaded))
+              :runtime-error-message str}]
+    (effects/api-authorize-api-wallet! deps)
+    (is (= effects/contract-account-api-wallets-message
+           (get-in @store [:api-wallets-ui :modal :error])))
+    (swap! store assoc-in [:api-wallets-ui :modal :error] nil)
+    (effects/api-remove-api-wallet! deps)
+    (is (= effects/contract-account-api-wallets-message
+           (get-in @store [:api-wallets-ui :modal :error])))
+    (is (= 0 @approve-calls) "the wallet is never asked")))
+
 (deftest api-authorize-api-wallet-validation-error-updates-modal-state-without-requesting-approval-test
   (let [approve-calls (atom 0)
         store (atom {:wallet {:address owner-address}

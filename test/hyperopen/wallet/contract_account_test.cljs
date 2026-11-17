@@ -1,6 +1,7 @@
 (ns hyperopen.wallet.contract-account-test
   (:require [cljs.test :refer-macros [async deftest is testing use-fixtures]]
-            [hyperopen.wallet.contract-account :as contract-account]))
+            [hyperopen.wallet.contract-account :as contract-account]
+            [hyperopen.wallet.provider-registry :as provider-registry]))
 
 (def ^:private safe-address "0x0eef159d0f5fe7d186bd105fce15b46c422141cf")
 
@@ -182,4 +183,119 @@
                    (done)))
           (.catch (fn [err]
                     (is false (str "unexpected: " err))
+                    (done)))))))
+
+;; ---------- Batches ---------------------------------------------------------------
+
+(deftest atomic-batch-supported-reads-both-eip-5792-shapes-test
+  (is (true? (contract-account/atomic-batch-supported?
+              #js {"0x3e7" #js {:atomicBatch #js {:supported true}}}))
+      "the older shape, which Zodiac Pilot answers")
+  (is (true? (contract-account/atomic-batch-supported?
+              #js {"0x3e7" #js {:atomic #js {:status "supported"}}})))
+  (is (true? (contract-account/atomic-batch-supported?
+              #js {"0x3e7" #js {:atomic #js {:status "ready"}}})))
+  (is (false? (contract-account/atomic-batch-supported?
+               #js {"0x3e7" #js {:atomic #js {:status "unsupported"}}})))
+  (is (false? (contract-account/atomic-batch-supported?
+               #js {"0x1" #js {:atomicBatch #js {:supported true}}}))
+      "another chain's capability does not count")
+  (is (false? (contract-account/atomic-batch-supported? nil))))
+
+(defn- fake-wallet
+  "A HyperEVM wallet that records requests. `answers` maps a method to its
+   answer (a promise)."
+  [requests answers]
+  #js {:request (fn [args]
+                  (let [method (unchecked-get args "method")]
+                    (swap! requests conj [method (js->clj (unchecked-get args "params")
+                                                          :keywordize-keys true)])
+                    (case method
+                      "eth_chainId" (js/Promise.resolve "0x3e7")
+                      (or (get answers method)
+                          (js/Promise.reject (js/Error. (str "unexpected " method)))))))})
+
+(def ^:private approve {:to "0xusdc" :data "0xapprove" :chainId "0x3e7"})
+(def ^:private deposit {:to "0xcdw" :data "0xdeposit" :chainId "0x3e7"})
+
+(defn- with-wallet
+  [wallet f]
+  (provider-registry/set-provider-override! wallet)
+  (-> (js/Promise.resolve nil)
+      (.then f)
+      (.finally (fn [] (provider-registry/clear-provider-override!)))))
+
+(deftest send-transactions-batches-when-the-wallet-runs-batches-test
+  (async done
+    (let [requests (atom [])
+          wallet (fake-wallet requests
+                              {"wallet_getCapabilities"
+                               (js/Promise.resolve #js {"0x3e7" #js {:atomicBatch #js {:supported true}}})
+                               "wallet_sendCalls" (js/Promise.resolve #js {:id "batch-1"})})]
+      (-> (with-wallet wallet #(contract-account/send-transactions! safe-address [approve deposit]))
+          (.then (fn [results]
+                   (is (= [{:hash nil :queued? true :batch-id "batch-1"}
+                           {:hash nil :queued? true :batch-id "batch-1"}]
+                          results))
+                   (let [[[_ [batch]]] (filter #(= "wallet_sendCalls" (first %)) @requests)]
+                     (is (= "0x3e7" (:chainId batch)))
+                     (is (= safe-address (:from batch)))
+                     (is (true? (:atomicRequired batch)))
+                     (is (= [{:to "0xusdc" :data "0xapprove"} {:to "0xcdw" :data "0xdeposit"}]
+                            (:calls batch))
+                         "both calls in one request, in order"))
+                   (is (empty? (filter #(= "eth_sendTransaction" (first %)) @requests)))
+                   (done)))
+          (.catch (fn [err] (is false (str "unexpected: " err)) (done)))))))
+
+(deftest send-transactions-takes-a-batch-pilot-queued-without-simulating-test
+  (async done
+    (let [wallet (fake-wallet (atom [])
+                              {"wallet_getCapabilities"
+                               (js/Promise.resolve #js {"0x3e7" #js {:atomicBatch #js {:supported true}}})
+                               "wallet_sendCalls"
+                               (js/Promise.reject (js/Error. pilot-not-simulated-message))})]
+      (-> (with-wallet wallet #(contract-account/send-transactions! safe-address [approve deposit]))
+          (.then (fn [results]
+                   (is (= (repeat 2 {:hash nil :queued? true}) results))
+                   (done)))
+          (.catch (fn [err] (is false (str "unexpected: " err)) (done)))))))
+
+(deftest send-transactions-goes-one-by-one-without-batches-test
+  (async done
+    (let [requests (atom [])
+          wallet (fake-wallet requests
+                              {"wallet_getCapabilities" (js/Promise.reject (js/Error. "Method not found"))
+                               "eth_sendTransaction" (js/Promise.resolve "0xhash")})]
+      (-> (with-wallet wallet #(contract-account/send-transactions! safe-address [approve deposit]))
+          (.then (fn [results]
+                   (is (= [{:hash "0xhash"} {:hash "0xhash"}] results))
+                   (is (= 2 (count (filter #(= "eth_sendTransaction" (first %)) @requests))))
+                   (is (empty? (filter #(= "wallet_sendCalls" (first %)) @requests)))
+                   (done)))
+          (.catch (fn [err] (is false (str "unexpected: " err)) (done)))))))
+
+(deftest send-transactions-sends-a-single-transaction-as-is-test
+  (async done
+    (let [requests (atom [])
+          wallet (fake-wallet requests {"eth_sendTransaction" (js/Promise.resolve "0xhash")})]
+      (-> (with-wallet wallet #(contract-account/send-transactions! safe-address [deposit]))
+          (.then (fn [results]
+                   (is (= [{:hash "0xhash"}] results))
+                   (is (empty? (filter #(= "wallet_getCapabilities" (first %)) @requests))
+                       "no need to ask about batches for one transaction")
+                   (done)))
+          (.catch (fn [err] (is false (str "unexpected: " err)) (done)))))))
+
+(deftest send-transactions-surfaces-a-refused-batch-test
+  (async done
+    (let [wallet (fake-wallet (atom [])
+                              {"wallet_getCapabilities"
+                               (js/Promise.resolve #js {"0x3e7" #js {:atomicBatch #js {:supported true}}})
+                               "wallet_sendCalls"
+                               (js/Promise.reject (js/Error. "User rejected the request."))})]
+      (-> (with-wallet wallet #(contract-account/send-transactions! safe-address [approve deposit]))
+          (.then (fn [_] (is false "must not resolve") (done)))
+          (.catch (fn [err]
+                    (is (re-find #"rejected" (.-message err)))
                     (done)))))))
