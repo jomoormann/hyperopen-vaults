@@ -54,6 +54,8 @@ The app moves funds only between the account's own balances. Each move is a tran
 
 Every other move is refused: sends to another address and withdrawals to another chain. For a contract account, Deposit, Withdraw and Send open Transfer instead of their own dialogs, and authorizing or removing other API wallets is refused.
 
+**The account needs a little HYPE on Spot.** HyperCore charges every move from Spot to HyperEVM a fee of 200,000 gas at the next HyperEVM block's base fee, paid in Spot HYPE (a few hundred-thousandths of a HYPE). Until the account holds some, the Transfer dialog refuses the move with "You need about … HYPE on Spot to pay the HyperEVM transfer fee." Fund it once with about 0.001 HYPE, which covers dozens of withdrawals. Either send HYPE to the account's address on Hyperliquid from any account that holds it, or send HYPE to the account on HyperEVM and move it with HyperEVM to Spot. A role that only allows USDC moves (for example the Hyperliquid presets of `@zodiaceco/presets`) cannot do the second, so do it as an owner of the account.
+
 
 ## Wallets that queue transactions
 
