@@ -24,7 +24,17 @@
     <img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=for-the-badge" alt="License: AGPL v3" />
   </a>
 </p>
-> **This is a fork.** It is [Hyperopen](https://github.com/thegeronimo/hyperopen) by thegeronimo with one addition, made in November 2026: a contract account on HyperEVM (a Safe, for example) can trade. Everything else is upstream's work. The license is the same, AGPL-3.0. The addition is experimental and has not yet run with a real vault on mainnet. See [docs/contract-accounts.md](docs/contract-accounts.md). To run a copy of your own, see [docs/self-hosting.md](docs/self-hosting.md).
+
+> [!NOTE]
+> **This is a fork** of [Hyperopen](https://github.com/thegeronimo/hyperopen) by thegeronimo, under the same license (AGPL-3.0). Everything not listed here is upstream's work. What this fork adds (November 2026, experimental):
+>
+> - **Contract accounts on HyperEVM** (a Safe, for example) can use Hyperliquid. Such an account cannot sign Hyperliquid's messages, so it registers a trading key and moves funds through CoreWriter transactions that its owners or roles approve.
+> - **The trading key** stays on this device behind a passkey, locks after 30 minutes idle, expires after 90 days and can be renewed or replaced from the wallet menu. The app signs with it only what the app itself sends.
+> - **Funds stay with the account:** deposits from HyperEVM, perps and spot, withdrawals back to the account's own HyperEVM address, its own sub-accounts, and staking. Sends to other addresses and withdrawals to other chains are refused, and their dialogs are replaced by Transfer.
+> - **Batching:** steps that belong together (approve and deposit, perps to HyperEVM, stake from spot) go to the wallet as one batch, so a Safe signs and executes them once.
+> - **Self-hosting:** a release that anyone can build and run.
+>
+> It has run end to end with a test Safe on HyperEVM mainnet with small amounts, through Zodiac Pilot. See [docs/contract-accounts.md](docs/contract-accounts.md) and, to run a copy of your own, [docs/self-hosting.md](docs/self-hosting.md).
 
 <p align="center">
   <img src="docs/images/screenshot-trade.png" alt="Hyperopen trading interface" width="100%" />

@@ -10,7 +10,7 @@ source_of_truth: false
 
 This fork lets a contract account on HyperEVM trade on Hyperliquid. A Safe is the usual example. Upstream Hyperopen serves wallets that sign with their own key; nothing changes for them.
 
-Status: experimental. It is tested against a stand-in wallet and a real passkey lockbox. It has not yet run with a real vault on mainnet.
+Status: experimental. It is tested against a stand-in wallet and a real passkey lockbox, and has run end to end with a test Safe on HyperEVM mainnet through Zodiac Pilot, with small amounts: registering the trading key, an order and its close, a USDC deposit from HyperEVM, perps and spot, a withdrawal to HyperEVM, the direct perps routes and moving HYPE to staking.
 
 ## Why it needs its own path
 
@@ -69,9 +69,10 @@ Zodiac Pilot answers a transaction on a chain it cannot simulate with the error 
 
 ## Not proven yet
 
-- A full run with a real vault on mainnet.
 - Removing a trading key through CoreWriter (registering the zero address under the key's name).
-- The Spot to HyperEVM move for a contract account.
+- Deposits of HYPE and other linked tokens from HyperEVM, and withdrawals of tokens other than USDC.
+- Moves to and from sub-accounts and between named perp dexes.
+- Unstaking and the way back from staking to spot.
 
 ## Where the code is
 
