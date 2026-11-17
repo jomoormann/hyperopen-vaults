@@ -1,6 +1,6 @@
 // Adds, lists and revokes passwords of the test deployment.
 //
-//   npm run test-access:add -- <label>      new random password, printed once
+//   npm run test-access:add -- <label>      asks for the password (hidden, twice)
 //   npm run test-access:list                labels of all passwords
 //   npm run test-access:revoke -- <label>   deletes every password with that label
 //
@@ -12,7 +12,6 @@
 // stored or passed on the command line.
 
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { passwordKey } from "../../deploy/test-pages/lib/access_gate.mjs";
@@ -31,8 +30,65 @@ export function validateLabel(label) {
   return label;
 }
 
-export function generatePassword() {
-  return randomBytes(18).toString("base64url");
+export function validatePassword(password, confirmation) {
+  if (typeof password !== "string" || password.length === 0) {
+    throw new Error("The password is empty.");
+  }
+  if (password !== confirmation) {
+    throw new Error("The two passwords differ.");
+  }
+  return password;
+}
+
+// Reads one line from the terminal without echoing it, or from stdin when it
+// is piped (`printf '%s\n' "$PW" "$PW" | npm run test-access:add -- anna`).
+function readHidden(prompt, lines) {
+  if (!process.stdin.isTTY) {
+    return lines.next().then(({ value }) => value ?? "");
+  }
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    let value = "";
+    process.stderr.write(prompt);
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    const onData = (chunk) => {
+      for (const char of chunk) {
+        if (char === "\r" || char === "\n") {
+          done();
+          return resolve(value);
+        }
+        if (char === "\u0003") {
+          done();
+          return reject(new Error("Cancelled."));
+        }
+        if (char === "\u007f" || char === "\b") {
+          value = value.slice(0, -1);
+        } else {
+          value += char;
+        }
+      }
+    };
+    const done = () => {
+      stdin.off("data", onData);
+      stdin.setRawMode(false);
+      stdin.pause();
+      process.stderr.write("\n");
+    };
+    stdin.on("data", onData);
+  });
+}
+
+async function askPassword() {
+  let lines = null;
+  if (!process.stdin.isTTY) {
+    const { createInterface } = await import("node:readline");
+    lines = createInterface({ input: process.stdin })[Symbol.asyncIterator]();
+  }
+  const password = await readHidden("Password: ", lines);
+  const confirmation = await readHidden("Again: ", lines);
+  return validatePassword(password, confirmation);
 }
 
 // The keys whose label is `label`, from `wrangler kv key list` output.
@@ -70,8 +126,12 @@ function listKeys(id) {
 
 async function add(label) {
   const id = namespaceId();
-  const password = generatePassword();
+  const password = await askPassword();
   const key = await passwordKey(password);
+
+  if (listKeys(id).some((entry) => entry.name === key)) {
+    throw new Error("This password is already in use. Choose another one.");
+  }
 
   wrangler([
     "kv", "key", "put", key, label,
@@ -80,7 +140,7 @@ async function add(label) {
     "--remote",
   ]);
 
-  console.log(`Password for ${label} (shown once, pass it on privately):\n\n  ${password}\n`);
+  console.log(`Added a password for ${label}.`);
 }
 
 function list() {

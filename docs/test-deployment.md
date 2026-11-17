@@ -38,11 +38,11 @@ This is done for the current account. For another account:
 
 Run these from the repository root. They need `npx wrangler login`, or `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in the environment.
 
-    npm run test-access:add -- anna       # makes a password for anna and prints it once
+    npm run test-access:add -- anna       # asks for anna's password, hidden, twice
     npm run test-access:list              # lists whose passwords exist
     npm run test-access:revoke -- anna    # deletes anna's passwords
 
-Pass a new password on privately. It works within a minute or so, and a revoked one stops working within a minute or so, because Cloudflare caches KV reads briefly at the edge. Nothing is redeployed.
+A password can be used by one label only; it never goes to Cloudflare or onto the command line, only its SHA-256 hash. Pass it on privately. It works within a minute or so, and a revoked one stops working within a minute or so, because Cloudflare caches KV reads briefly at the edge. Nothing is redeployed.
 
 ## Trying it locally
 

@@ -12,7 +12,7 @@ import {
   unauthorizedResponse,
 } from "../../deploy/test-pages/lib/access_gate.mjs";
 import {
-  generatePassword,
+  validatePassword,
   keysWithLabel,
   labelsOf,
   validateLabel,
@@ -171,10 +171,11 @@ test("labels are short and plain", () => {
   }
 });
 
-test("passwords are long and random", () => {
-  const first = generatePassword();
-  assert.match(first, /^[A-Za-z0-9_-]{24}$/);
-  assert.notEqual(first, generatePassword());
+test("a password is not empty and is typed the same twice", () => {
+  assert.equal(validatePassword("pw", "pw"), "pw");
+  assert.throws(() => validatePassword("", ""), /empty/);
+  assert.throws(() => validatePassword("correct horse", "correct house"), /differ/);
+  assert.throws(() => validatePassword(undefined, undefined), /empty/);
 });
 
 test("revokes by label and lists labels only", () => {
