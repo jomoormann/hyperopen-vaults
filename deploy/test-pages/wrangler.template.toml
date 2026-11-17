@@ -1,0 +1,15 @@
+# Template of the Cloudflare Pages project of the password-protected test
+# deployment. `npm run test-access:stage` writes out/test-pages/wrangler.toml
+# from it, with the project name and KV namespace id filled in. Pages only
+# reads a wrangler.toml at the root of the directory it deploys from, so the
+# deploy runs from out/test-pages, and the password gate in functions/ applies
+# to the test deployment only. See docs/test-deployment.md.
+
+name = "__PROJECT_NAME__"
+pages_build_output_dir = "../release-public"
+compatibility_date = "2026-11-01"
+
+# The passwords: key = hex SHA-256 of a password, value = whose it is.
+[[kv_namespaces]]
+binding = "TEST_ACCESS"
+id = "__KV_NAMESPACE_ID__"
