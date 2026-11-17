@@ -33,43 +33,47 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 // Files Cloudflare reads itself; they are never served.
 const CLOUDFLARE_FILES = new Set(["_headers", "_redirects", ROUTES_FILE]);
 
-// The gate runs for pages and /api/*. Every directory in the release root
-// holds static files only, and every top-level file except *.html is static:
-// those are served without it. The code is public anyway, and it keeps a page
-// load to one or two Function invocations on the free plan. Any other path,
-// including every address the app routes in the browser, reaches the gate.
-// `entries` are the release root's entries as { name, directory }.
-export function buildRoutes(entries) {
-  const exclude = [];
-
-  for (const { name, directory } of entries) {
-    if (CLOUDFLARE_FILES.has(name)) {
-      continue;
-    }
-    if (directory) {
-      exclude.push(`/${name}/*`);
-    } else if (!name.endsWith(".html")) {
-      exclude.push(`/${name}`);
-    }
-  }
-
-  exclude.sort();
+// The gate runs for pages and /api/*. Every other file of the release is
+// static and is served without it: the code is public anyway, and it keeps a
+// page load to one or two Function invocations on the free plan. Files are
+// excluded one by one, never by folder: for a path with no file Pages falls
+// back to index.html, so `/js/*` would serve the app without the gate at
+// /js/anything. Any path that is not a static file reaches the gate.
+// `files` are the release's file paths relative to its root, with "/".
+export function buildRoutes(files) {
+  const exclude = files
+    .filter((file) => !CLOUDFLARE_FILES.has(file) && !file.endsWith(".html"))
+    .map((file) => `/${file}`)
+    .sort();
 
   const routes = { version: 1, include: ["/*"], exclude };
-  const rules = [...routes.include, ...routes.exclude];
+  const ruleCount = routes.include.length + routes.exclude.length;
 
-  if (rules.length > MAX_RULES) {
+  if (ruleCount > MAX_RULES) {
     throw new Error(
-      `${ROUTES_FILE} would have ${rules.length} rules; Cloudflare Pages allows ${MAX_RULES}.`,
+      `${ROUTES_FILE} would have ${ruleCount} rules; Cloudflare Pages allows ${MAX_RULES}.`,
     );
   }
-  for (const rule of rules) {
-    if (rule.length > MAX_RULE_LENGTH) {
-      throw new Error(`${ROUTES_FILE} rule is longer than ${MAX_RULE_LENGTH} characters: ${rule}`);
+  for (const rule of routes.exclude) {
+    if (rule.length > MAX_RULE_LENGTH || /[*:]/.test(rule)) {
+      throw new Error(`${ROUTES_FILE} cannot hold this path as an exact rule: ${rule}`);
     }
   }
 
   return routes;
+}
+
+async function releaseFiles(root, prefix = "") {
+  const files = [];
+  for (const dirent of await fs.readdir(path.join(root, prefix), { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${dirent.name}` : dirent.name;
+    if (dirent.isDirectory()) {
+      files.push(...(await releaseFiles(root, relative)));
+    } else {
+      files.push(relative);
+    }
+  }
+  return files;
 }
 
 export function renderWranglerConfig(template, { projectName, kvNamespaceId }) {
@@ -110,10 +114,7 @@ export async function stage({
   });
   await fs.writeFile(path.join(stageRoot, "wrangler.toml"), config);
 
-  const dirents = await fs.readdir(releaseRoot, { withFileTypes: true });
-  const routes = buildRoutes(
-    dirents.map((dirent) => ({ name: dirent.name, directory: dirent.isDirectory() })),
-  );
+  const routes = buildRoutes(await releaseFiles(releaseRoot));
   await fs.writeFile(path.join(releaseRoot, ROUTES_FILE), `${JSON.stringify(routes, null, 2)}\n`);
 
   return { stageRoot, routes };

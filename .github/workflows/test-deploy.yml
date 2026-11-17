@@ -102,8 +102,9 @@ jobs:
           echo "url=${url}" >> "$GITHUB_OUTPUT"
           echo "Deployed to ${url}" >> "$GITHUB_STEP_SUMMARY"
 
-      # The deployment must refuse a page without a password and still serve
-      # static files, or the gate is not doing its job.
+      # The deployment must refuse a page, and a missing file under a static
+      # folder (which Pages would answer with index.html), without a password,
+      # and still serve static files. Otherwise the gate is not doing its job.
       - name: Check that pages ask for a password
         if: steps.credentials.outputs.present == 'true' && steps.deploy.outputs.url != ''
         env:
@@ -112,12 +113,13 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3 4 5 6; do
             page="$(curl -s -o /dev/null -w '%{http_code}' "$URL/trade")"
+            missing="$(curl -s -o /dev/null -w '%{http_code}' "$URL/js/no-such-file")"
             asset="$(curl -s -o /dev/null -w '%{http_code}' "$URL/robots.txt")"
-            if [ "$page" = "401" ] && [ "$asset" = "200" ]; then
-              echo "Gate active: /trade -> 401, /robots.txt -> 200."
+            if [ "$page" = "401" ] && [ "$missing" = "401" ] && [ "$asset" = "200" ]; then
+              echo "Gate active: /trade -> 401, /js/no-such-file -> 401, /robots.txt -> 200."
               exit 0
             fi
-            echo "Attempt ${attempt}: /trade -> ${page}, /robots.txt -> ${asset}"
+            echo "Attempt ${attempt}: /trade -> ${page}, /js/no-such-file -> ${missing}, /robots.txt -> ${asset}"
             sleep 10
           done
           echo "::error::The deployment at $URL does not ask for a password (or does not serve static files)."

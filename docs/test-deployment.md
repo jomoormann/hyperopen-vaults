@@ -15,16 +15,16 @@ A copy of this fork runs on Cloudflare Pages for testing, behind a password: htt
 - Every push to `main` deploys the release build to https://hyperopen-vaults.pages.dev. Every push to another branch deploys to that branch's own preview address, which the workflow prints in its summary. `.github/workflows/test-deploy.yml` does this.
 - Every page asks for a password first, with the browser's own prompt. The username is ignored; any name works.
 - Each tester gets their own password. Revoking one does not affect anyone else.
-- Only pages and `/api/*` are behind the password. Scripts, styles, fonts and images are not: the code is public on GitHub anyway, and without a page nobody can use the app on this address. This also keeps the free plan's Function requests to one or two per page load.
+- Only the release's static files (scripts, styles, fonts, images) are served without the password, each listed by its exact path. Everything else asks for it, including any path with no file, which Pages would otherwise answer with the app. The code is public on GitHub anyway, and without a page nobody can use the app on this address. This also keeps the free plan's Function requests to one or two per page load.
 - Each preview address is its own origin. A trading key enabled on one address is not available on another, and must be enabled again there.
 
 ## How it works
 
 - `deploy/test-pages/functions/_middleware.js` is the password gate, with its logic in `deploy/test-pages/lib/access_gate.mjs`.
 - The passwords live in the Workers KV namespace `hyperopen-vaults-test-access`, bound as `TEST_ACCESS`. Each entry's key is the SHA-256 of a password and its value names whose it is. The password itself is stored nowhere.
-- `npm run test-access:stage` puts the Pages project together in `out/test-pages` next to the release in `out/release-public`, and writes the release's `_routes.json`, which keeps static files away from the gate. Pages only reads a configuration and functions from the directory the deploy runs in, so the public release and self-hosted copies (see [self-hosting.md](self-hosting.md)) never get the gate.
+- `npm run test-access:stage` puts the Pages project together in `out/test-pages` next to the release in `out/release-public`, and writes the release's `_routes.json`, which lists the static files that skip the gate (at most 100 rules; staging fails beyond that). Pages only reads a configuration and functions from the directory the deploy runs in, so the public release and self-hosted copies (see [self-hosting.md](self-hosting.md)) never get the gate.
 - If the password store is not bound, every page answers 503, never the app.
-- After each deploy the workflow checks that `/trade` asks for a password and `/robots.txt` does not.
+- After each deploy the workflow checks that `/trade` and a missing file under `/js/` ask for a password and `/robots.txt` does not.
 
 ## Setup, once
 

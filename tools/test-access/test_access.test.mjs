@@ -81,30 +81,42 @@ test("asks for a password with a 401 that nobody caches", async () => {
   assert.equal(response.headers.get("x-frame-options"), "DENY");
 });
 
-test("sends pages through the gate and static files around it", () => {
+test("sends pages through the gate and only existing static files around it", () => {
   const routes = buildRoutes([
-    { name: "_headers", directory: false },
-    { name: "index.html", directory: false },
-    { name: "trade.html", directory: false },
-    { name: "js", directory: true },
-    { name: "css", directory: true },
-    { name: "sw.js", directory: false },
-    { name: "favicon.ico", directory: false },
+    "_headers",
+    "_routes.json",
+    "index.html",
+    "trade.html",
+    "js/main.ABC.js",
+    "css/main.DEF.css",
+    "fonts/inter/regular.woff2",
+    "sw.js",
+    "favicon.ico",
   ]);
 
+  // No folder wildcards: a missing file under /js/ must reach the gate, or
+  // Pages' fallback would serve index.html without a password.
   assert.deepEqual(routes, {
     version: 1,
     include: ["/*"],
-    exclude: ["/css/*", "/favicon.ico", "/js/*", "/sw.js"],
+    exclude: [
+      "/css/main.DEF.css",
+      "/favicon.ico",
+      "/fonts/inter/regular.woff2",
+      "/js/main.ABC.js",
+      "/sw.js",
+    ],
   });
 });
 
 test("refuses more rules than Cloudflare Pages accepts", () => {
-  const entries = Array.from({ length: MAX_RULES }, (_, index) => ({
-    name: `file-${index}.png`,
-    directory: false,
-  }));
-  assert.throws(() => buildRoutes(entries), /allows 100/);
+  const files = Array.from({ length: MAX_RULES }, (_, index) => `file-${index}.png`);
+  assert.throws(() => buildRoutes(files), /allows 100/);
+});
+
+test("refuses paths that Pages would read as a pattern", () => {
+  assert.throws(() => buildRoutes(["js/a*b.js"]), /exact rule/);
+  assert.throws(() => buildRoutes(["js/:id.js"]), /exact rule/);
 });
 
 test("stages the Pages project next to the release", async () => {
@@ -112,6 +124,7 @@ test("stages the Pages project next to the release", async () => {
   const releaseRoot = path.join(out, "release-public");
   const stageRoot = path.join(out, "test-pages");
   await fs.mkdir(path.join(releaseRoot, "fonts"), { recursive: true });
+  await fs.writeFile(path.join(releaseRoot, "fonts", "inter.woff2"), "");
   await fs.writeFile(path.join(releaseRoot, "index.html"), "");
   await fs.writeFile(path.join(releaseRoot, "robots.txt"), "");
 
@@ -120,7 +133,7 @@ test("stages the Pages project next to the release", async () => {
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(releaseRoot, "_routes.json"), "utf8")), {
     version: 1,
     include: ["/*"],
-    exclude: ["/fonts/*", "/robots.txt"],
+    exclude: ["/fonts/inter.woff2", "/robots.txt"],
   });
   const config = await fs.readFile(path.join(stageRoot, "wrangler.toml"), "utf8");
   assert.match(config, /^name = "hv-test"$/m);

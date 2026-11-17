@@ -1,7 +1,7 @@
 // Every request that reaches a Function on the test deployment passes this
-// gate first. _routes.json (tools/test-access/write_routes.mjs) sends only
-// pages and /api/* here; scripts, styles, fonts and images are served without
-// it, since the code is public anyway.
+// gate first. _routes.json (tools/test-access/stage.mjs) lets only the
+// release's static files, each by its exact path, skip it; the code is public
+// anyway.
 import {
   authorizedLabel,
   notConfiguredResponse,
