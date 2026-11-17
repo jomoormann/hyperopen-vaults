@@ -13,7 +13,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { passwordKey } from "../../deploy/test-pages/lib/access_gate.mjs";
+import { MAX_PASSWORD_LENGTH, passwordKey } from "../../deploy/test-pages/lib/access_gate.mjs";
 import { DEFAULT_KV_NAMESPACE_ID } from "./stage.mjs";
 
 export const WRANGLER = "wrangler@4.156.2";
@@ -65,6 +65,9 @@ function listKeys(id) {
 async function add(label, password) {
   if (!password) {
     throw new Error("Usage: npm run test-access:add -- <label> <password>");
+  }
+  if (password.length > MAX_PASSWORD_LENGTH) {
+    throw new Error(`A password has at most ${MAX_PASSWORD_LENGTH} characters.`);
   }
   wrangler([
     "kv", "key", "put", await passwordKey(password), label,
