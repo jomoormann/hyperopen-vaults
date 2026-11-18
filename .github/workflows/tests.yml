@@ -11,23 +11,25 @@ permissions:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest, so a runner image change never
+    # alters a build unnoticed. Bump it deliberately in all workflows.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -43,7 +45,7 @@ jobs:
           "$HOME/.local/bin/bb" --version
 
       - name: Cache Clojure Dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.m2/repository
@@ -111,7 +113,7 @@ jobs:
 
       - name: Upload Coverage Artifact
         if: always() && hashFiles('coverage/**') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage
@@ -119,7 +121,7 @@ jobs:
 
       - name: Upload Raw Coverage Diagnostics
         if: always() && steps.coverage.outcome == 'failure' && hashFiles('.coverage/**') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: raw-v8-coverage
           path: .coverage

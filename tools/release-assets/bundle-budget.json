@@ -1,8 +1,8 @@
 {
-  "comment": "Soft gzip target for the release main module. ADVISORY ONLY: exceeding it prints a warning (and a GitHub Actions annotation in CI) but never fails the build or the Cloudflare deploy — small toolchain gzip jitter and reviewed feature growth must not break releases. Set with headroom above the measured prod size (~617,742 gz on 2026-06-15). The diet goal is still to shrink main back toward 616,000 (M3) and re-tighten this target; see docs/exec-plans/active/2026-06-11-pagespeed-desktop-performance-90.md. Re-record the measured size anytime with `node tools/release-assets/check_bundle_budget.mjs --update`.",
+  "comment": "Soft gzip target for the release main module. ADVISORY ONLY: exceeding it prints a warning (and a GitHub Actions annotation in CI) but never fails the build or the Cloudflare deploy. Re-ratcheted on 2026-11-18 to the measured 1008494 gz plus headroom. Almost all growth since the 640,000 target of 2026-06-15 (~617,742 measured then) came from upstream Hyperopen features merged before this fork branched (main was ~987 kB gz at upstream 1d103b49, e.g. Vol Range, portfolio and funding growth); this fork's own additions are ~13 kB. The diet goal in docs/exec-plans/active/2026-06-11-pagespeed-desktop-performance-90.md still stands and belongs upstream. Re-record with `node tools/release-assets/check_bundle_budget.mjs --update`, then add headroom.",
   "main": {
-    "gzipBytes": 640000,
-    "recordedAt": "2026-06-15T20:00:00.000Z",
-    "recordedOutputName": "main.BD279F59DA7E9604F204650B1230D0E8.js"
+    "gzipBytes": 1030000,
+    "recordedAt": "2026-11-18T08:55:45.699Z",
+    "recordedOutputName": "main.7713E2317F5799A86C22530DC6C8D092.js"
   }
 }
