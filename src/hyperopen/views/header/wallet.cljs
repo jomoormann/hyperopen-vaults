@@ -82,7 +82,7 @@
                     "text-left"
                     "text-xs"
                     "font-medium"
-                    "text-[#50f6d2]"
+                    "text-ho-accent"
                     "transition-colors"
                     "hover:underline"
                     "focus:outline-none"]
